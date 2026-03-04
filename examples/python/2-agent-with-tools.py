@@ -13,11 +13,20 @@ The APIM gateway:
 """
 
 import json
+import os
 from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential
 
-PROJECT_ID = "my-hub-project"
-APIM_GATEWAY_URL = "https://your-company-ai.azure-api.net"
+# Read from environment - NEVER hardcode direct endpoints!
+PROJECT_ID = os.environ.get("AI_PROJECT_ID", "my-hub-project")
+APIM_GATEWAY_URL = os.environ.get("AI_GATEWAY_ENDPOINT", "https://your-company-ai.azure-api.net")
+
+# Validate endpoint is APIM, not direct Foundry
+if not APIM_GATEWAY_URL.endswith(".azure-api.net"):
+    raise ValueError(
+        f"Invalid endpoint: {APIM_GATEWAY_URL}. "
+        "Must use APIM gateway (*.azure-api.net), not direct Foundry endpoint."
+    )
 
 def create_agent_with_tools():
     """Create an agent that can use tools."""
@@ -26,7 +35,7 @@ def create_agent_with_tools():
     client = AIProjectClient(
         credential=credential,
         project_id=PROJECT_ID,
-        endpoint=APIM_GATEWAY_URL
+        endpoint=APIM_GATEWAY_URL  # Always APIM - enforces quotas & policies
     )
     
     # 1. Define tools (functions the agent can call)

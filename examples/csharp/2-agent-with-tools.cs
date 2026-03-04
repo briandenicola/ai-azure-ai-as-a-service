@@ -14,10 +14,21 @@ using System.Text.Json;
 class AgentWithToolsExample
 {
     private const string ProjectId = "my-hub-project";
-    private const string ApimGatewayUrl = "https://your-company-ai.azure-api.net";
+    // Read from environment - don't hardcode!
+    private static readonly string ApimGatewayUrl = 
+        Environment.GetEnvironmentVariable("AI_GATEWAY_ENDPOINT") 
+        ?? "https://your-company-ai.azure-api.net";
 
     static async Task Main(string[] args)
     {
+        // Validate endpoint is APIM, not direct Foundry
+        if (!ApimGatewayUrl.Contains(".azure-api.net"))
+        {
+            throw new InvalidOperationException(
+                $"Invalid endpoint: {ApimGatewayUrl}. " +
+                "Must use APIM gateway (*.azure-api.net), not direct Foundry endpoint.");
+        }
+        
         var client = new AIProjectClient(new Uri(ApimGatewayUrl), new DefaultAzureCredential());
         
         await CreateAndRunAgentAsync(client);

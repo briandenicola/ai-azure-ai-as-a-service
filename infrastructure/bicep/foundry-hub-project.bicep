@@ -40,7 +40,7 @@ resource aiSearch 'Microsoft.Search/searchServices@2021-04-01-preview' = {
     replicaCount: 1
     partitionCount: 1
     hostingMode: 'default'
-    publicNetworkAccess: 'enabled'
+    publicNetworkAccess: 'disabled'  // Force traffic through private endpoints only
   }
 }
 
@@ -56,6 +56,7 @@ resource foundryProject 'Microsoft.MachineLearningServices/workspaces@2023-04-01
     description: 'Centralized project for all AI models and agents'
     keyVaultId: resourceId('Microsoft.KeyVault/vaults', 'your-keyvault')
     storageAccount: resourceId('Microsoft.Storage/storageAccounts', 'your-storage')
+    publicNetworkAccess: 'Disabled'  // Force all access through APIM/private endpoints
   }
   identity: {
     type: 'SystemAssigned'
