@@ -38,35 +38,66 @@ This repository contains the **definitive architecture and implementation patter
 
 ```
 📁 docs/
-   📄 developer-quickstart.md       ← Developers START HERE
-   📁 adr/                           
+   📄 developer-quickstart.md          ← Developers START HERE
+   📄 developer-workflow-30days.md
+   📁 adr/
       📄 adr-001-why-apim.md
       📄 adr-002-foundry-integration.md
       📄 adr-003-servicenow-workflow.md
+      📄 adr-004-pci-dss-compliance.md  ← PCI DSS architecture decisions
    📁 playbooks/
       📄 setup-apim-gateway.md
-      📄 setup-foundry-hub-project.md
+      📄 enforce-apim-gateway-only.md
+      📄 pci-dss-configuration.md       ← PCI DSS step-by-step setup
+   📁 reference/
 
 📁 examples/
    📁 python/
       📄 1-simple-chat-via-apim.py
       📄 2-agent-with-tools.py
-      📄 3-foundry-project-client.py
+      📄 3-foundry-models.py
+      📄 4-chat-with-telemetry.py
+      📄 5-agent-with-advanced-telemetry.py
+      📄 6-foundry-agent-via-apim.py
    📁 csharp/
-      📄 1-agent-framework-apim.cs
-      📄 2-project-client-setup.cs
+      📄 1-simple-chat-via-apim.cs
+      📄 2-agent-with-tools.cs
+      📄 3-chat-with-telemetry.cs
+      📄 6-foundry-agent-via-apim.cs
 
 📁 infrastructure/
    📁 bicep/
-      📄 apim-gateway.bicep
+      📄 apim-gateway.bicep             ← Premium SKU + VNet + CMK + PCI config
       📄 foundry-hub-project.bicep
-      📄 app-insights-setup.bicep
+      📄 event-grid-automation.bicep
+      📄 managed-grafana.bicep
+   📁 terraform/
+      📁 apim-gateway/
+      📁 foundry-hub-project/
 
 📁 policies/
    📁 apim/
+      📄 auth-header-validation.xml
       📄 token-quota-by-department.xml
       📄 semantic-caching.xml
-      📄 auth-header-validation.xml
+      📄 circuit-breaker-multi-region.xml
+      📄 pci-dss-cardholder-data-protection.xml  ← PAN/CVV detection & blocking
+      📄 pci-dss-audit-logging.xml               ← CHD-free structured audit events
+
+📁 automation/
+   📁 functions/                        ← APIM subscription handler
+   📁 servicenow/                       ← Provisioning & quota workflows
+
+📁 observability/
+   📁 grafana/dashboards/
+      📄 performance-dashboard.json
+      📄 token-usage-dashboard.json
+
+📁 scripts/
+   📁 entra-id/                         ← Group & project provisioning scripts
+
+📁 tests/
+   📄 test-sdk-endpoint-routing.py
 ```
 
 ---
@@ -135,8 +166,6 @@ See [Developer Quick Start](docs/developer-quickstart.md) for more.
 ✅ **Managed Auth** - No API keys distributed to developers  
 ✅ **Multi-Region Support** - Load balance across Azure regions  
 ✅ **Chargeback Model** - Track spend by LOB, department, or cost center  
-
----
 
 ---
 
