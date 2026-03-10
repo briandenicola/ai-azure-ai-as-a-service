@@ -280,6 +280,92 @@ All 11 previously identified gaps have been filled:
 
 ---
 
+## ✅ PCI DSS Compliance for AI Models & Foundry Agents
+
+> Added: 2026-03-10  
+> Reference: [ADR-004](docs/adr/adr-004-pci-dss-compliance.md) | [Playbook](docs/playbooks/pci-dss-configuration.md)
+
+### Infrastructure (PCI DSS Req 1, 3, 4)
+
+| Control | File | PCI DSS Req | Status |
+|---|---|---|---|
+| APIM upgraded to **Premium SKU** (VNet injection required) | `infrastructure/bicep/apim-gateway.bicep` | Req 1.3 | ✅ |
+| APIM in **Internal VNet mode** (no public gateway traffic) | `infrastructure/bicep/apim-gateway.bicep` | Req 1.3 | ✅ |
+| NSG rules documented (WAF-only inbound on 443) | `docs/playbooks/pci-dss-configuration.md` Step 3 | Req 1.3.2 | ✅ |
+| **TLS 1.0, 1.1, SSL 3.0 disabled** via APIM customProperties | `infrastructure/bicep/apim-gateway.bicep` | Req 4.2.1 | ✅ |
+| Triple-DES cipher suite disabled | `infrastructure/bicep/apim-gateway.bicep` | Req 4.2.1 | ✅ |
+| Backend TLS cert chain + name validation | `infrastructure/bicep/apim-gateway.bicep` | Req 4.2.1 | ✅ |
+| **Customer-managed encryption key (CMK)** via Key Vault HSM | `infrastructure/bicep/apim-gateway.bicep` | Req 3.7 | ✅ |
+| Key Vault key rotation every 90 days | `docs/playbooks/pci-dss-configuration.md` Step 2 | Req 3.7.1 | ✅ |
+| App Insights: public network access **disabled**, local auth disabled | `infrastructure/bicep/apim-gateway.bicep` | Req 1 / Req 3 | ✅ |
+| APIM diagnostic settings → Log Analytics (all log categories) | `infrastructure/bicep/apim-gateway.bicep` | Req 10 | ✅ |
+| Log Analytics + App Insights retention **395 days** (13 months) | `infrastructure/bicep/apim-gateway.bicep` | Req 10.5.1 | ✅ |
+| APIM **system-assigned managed identity** (no shared secrets) | `infrastructure/bicep/apim-gateway.bicep` | Req 8.6 | ✅ |
+
+### PCI-Scoped APIM Product (PCI DSS Req 7)
+
+| Control | File | PCI DSS Req | Status |
+|---|---|---|---|
+| `ai-pci-payment` product with **manual approval** gate | `infrastructure/bicep/apim-gateway.bicep` | Req 7.2 | ✅ |
+| `subscriptionsLimit: 1` per subscriber (least-privilege blast radius) | `infrastructure/bicep/apim-gateway.bicep` | Req 7.2 | ✅ |
+| Semantic caching **prohibited** on PCI-scoped operations | `docs/adr/adr-004-pci-dss-compliance.md` | Req 3.5 | ✅ |
+
+### APIM Runtime Policies (PCI DSS Req 3, 4, 6, 10)
+
+| Control | File | PCI DSS Req | Status |
+|---|---|---|---|
+| **PAN detection** — blocks raw Visa/MC/Amex/Discover/Diners/JCB numbers (HTTP 422) | `policies/apim/pci-dss-cardholder-data-protection.xml` | Req 3.3.2 | ✅ |
+| **CVV/CVC detection** — blocks card security codes (HTTP 422) | `policies/apim/pci-dss-cardholder-data-protection.xml` | Req 3.3.1 | ✅ |
+| **Response PAN masking** — BIN + `******` + last 4 on any leaked PAN | `policies/apim/pci-dss-cardholder-data-protection.xml` | Req 3.4.1 | ✅ |
+| `Cache-Control: no-store` enforced on all PCI responses | `policies/apim/pci-dss-cardholder-data-protection.xml` | Req 3.5 | ✅ |
+| HTTP plain-text explicitly rejected at policy level | `policies/apim/pci-dss-cardholder-data-protection.xml` | Req 4.2.1 | ✅ |
+| Security headers: `HSTS`, `CSP`, `X-Frame-Options`, `X-Content-Type-Options` | `policies/apim/pci-dss-cardholder-data-protection.xml` | Req 6.4 | ✅ |
+| Infrastructure headers stripped (`Server`, `X-Powered-By`, `X-AspNet-Version`) | `policies/apim/pci-dss-cardholder-data-protection.xml` | Req 6.4 | ✅ |
+| Sanitized error responses (no CHD or stack traces in `on-error`) | `policies/apim/pci-dss-cardholder-data-protection.xml` | Req 6.4 | ✅ |
+
+### Audit Logging Policy (PCI DSS Req 10)
+
+| Control | File | PCI DSS Req | Status |
+|---|---|---|---|
+| `ACCESS_REQUEST` event logged at inbound for every call | `policies/apim/pci-dss-audit-logging.xml` | Req 10.2.1.1 | ✅ |
+| `ACCESS_GRANTED` / `ACCESS_DENIED` event at outbound | `policies/apim/pci-dss-audit-logging.xml` | Req 10.2.1.1 / 10.2.1.4 | ✅ |
+| `AUTH_FAILURE` (401) distinct event type with `alert_on_repeat: true` | `policies/apim/pci-dss-audit-logging.xml` | Req 10.2.1.4 | ✅ |
+| `AUTHZ_FAILURE` (403) distinct event type with `alert_on_repeat: true` | `policies/apim/pci-dss-audit-logging.xml` | Req 10.2.1.2 / 10.2.1.4 | ✅ |
+| `GATEWAY_ERROR` event with source/reason only (no CHD) | `policies/apim/pci-dss-audit-logging.xml` | Req 10.2.1.7 | ✅ |
+| Audit record fields: user ID, app ID, IP, API, path, timestamp, outcome, correlation ID | `policies/apim/pci-dss-audit-logging.xml` | Req 10.3.1 | ✅ |
+| Request/response **bodies never logged** (only metadata) | `policies/apim/pci-dss-audit-logging.xml` | Req 10.3.1 | ✅ |
+
+### Foundry Agent Specific (PCI DSS Req 3, 7)
+
+| Control | Guidance Location | PCI DSS Req | Status |
+|---|---|---|---|
+| All Foundry calls must route through **APIM** (not direct endpoint) | `docs/playbooks/pci-dss-configuration.md` Step 9b | Req 1 / 7 | ✅ |
+| Short thread TTL on payment-processing agents | `docs/playbooks/pci-dss-configuration.md` Step 9a | Req 3.3 | ✅ |
+| RAG / AI Search index must contain **no CHD** | `docs/playbooks/pci-dss-configuration.md` Step 9a | Req 3 | ✅ |
+| Fine-tuning training data scanned for CHD before upload | `docs/playbooks/pci-dss-configuration.md` Step 9c | Req 3 | ✅ |
+
+### SIEM Alerts (PCI DSS Req 10.7)
+
+| Alert | KQL Query Location | PCI DSS Req | Status |
+|---|---|---|---|
+| ≥5 `AUTH_FAILURE` from same IP in 5 min (brute force) | `docs/playbooks/pci-dss-configuration.md` Step 6 | Req 10.7 | ✅ |
+| PAN detected in request (HTTP 422 with PAN_DETECTED header) | `docs/playbooks/pci-dss-configuration.md` Step 6 | Req 10.7 | ✅ |
+| Audit log gap > 10 min during business hours | `docs/playbooks/pci-dss-configuration.md` Step 6 | Req 10.6.1 | ✅ |
+
+### Caller Responsibilities (Out of APIM Scope — Document for QSA)
+
+| Responsibility | PCI DSS Req | Status |
+|---|---|---|
+| - [ ] Operate a PCI-scoped **tokenization vault** (raw PAN never sent to APIM) | Req 3.4 | ⬜ Customer action |
+| - [ ] WAF (App Gateway WAF v2 or Front Door WAF) in **Prevention mode**, OWASP CRS 3.2+ | Req 6.4 / 6.5 | ⬜ Customer action |
+| - [ ] Entra ID **Conditional Access with MFA** for all admin identities | Req 8.3 | ⬜ Customer action |
+| - [ ] Annual **penetration test** of the CDE boundary (WAF → APIM → Foundry) | Req 11.4 | ⬜ Customer action |
+| - [ ] Annual re-approval of `ai-pci-payment` product subscriptions | Req 12.3.2 | ⬜ Customer action |
+| - [ ] Scope and assess the **caller application's CDE** separately | Req 12.5.2 | ⬜ Customer action |
+| - [ ] Log Analytics / storage **immutable log retention** (prevent tampering) | Req 10.3.2 | ⬜ Customer action |
+
+---
+
 ## 🎯 Future Enhancements (Optional)
 
 All critical and important topics from the Gemini chat are now complete. These are optional enhancements:
@@ -299,13 +385,15 @@ All critical and important topics from the Gemini chat are now complete. These a
 Use this to verify completeness before sharing with stakeholders:
 
 - [x] README.md exists and is comprehensive
-- [x] ADRs exist (001, 002, 003)
+- [x] ADRs exist (001, 002, 003, 004 — PCI DSS)
+- [x] PCI DSS APIM policies (pci-dss-cardholder-data-protection.xml, pci-dss-audit-logging.xml)
+- [x] PCI DSS configuration playbook
 - [x] Developer Quick Start guide exists
 - [x] 30-day workflow guide exists
 - [x] Python code examples (5)
 - [x] C# code examples (3)
-- [x] APIM policies (4)
-- [x] Bicep templates (3)
+- [x] APIM policies (6 — includes 2 PCI DSS policies)
+- [x] Bicep templates (3 — APIM Bicep updated for PCI DSS Premium SKU + CMK + VNet)
 - [x] Terraform templates (2)
 - [x] Managed Grafana template
 - [x] Event Grid + Function template
@@ -313,7 +401,7 @@ Use this to verify completeness before sharing with stakeholders:
 - [x] Entra ID CLI/PS scripts (3 scripts)
 - [x] Production implementation guide
 
-**Current Coverage:** 15/15 core areas ≈ **100% complete** ✅🎉
+**Current Coverage:** 16/16 core areas ≈ **100% complete** ✅🎉 (includes PCI DSS)
 
 ---
 
@@ -326,6 +414,6 @@ Use this to verify completeness before sharing with stakeholders:
 
 ---
 
-**Last Updated:** Feb 27, 2026  
-**Repo Status:** 100% Complete - Production-Ready Definitive Guide  
-**Total Files:** 50+ files covering all aspects of Azure AI as a managed service
+**Last Updated:** 2026-03-10  
+**Repo Status:** 100% Complete — Production-Ready, PCI DSS v4.0 Capable  
+**Total Files:** 53+ files covering all aspects of Azure AI as a managed service

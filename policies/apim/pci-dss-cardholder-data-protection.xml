@@ -1,0 +1,269 @@
+<!--
+APIM Policy: PCI DSS Cardholder Data Protection
+=================================================
+
+PURPOSE:
+  Prevents raw cardholder data (CHD) from reaching AI models (Foundry agents,
+  Azure OpenAI, etc.).  The AI model backend is NOT a PCI-scoped system — raw
+  PANs must never cross into it.  Instead, callers must tokenize PANs in their
+  own PCI-scoped tokenization service BEFORE calling this API, then pass the
+  opaque token.  This policy also provides defense-in-depth by masking any PAN
+  that leaks into a response.
+
+PCI DSS v4.0 REQUIREMENTS ADDRESSED:
+  Req 3.3   – Do not retain sensitive authentication data after authorization
+  Req 3.4   – Render PAN unreadable anywhere it is stored / transmitted
+  Req 3.5   – PAN secured wherever it is stored (applies to caches, logs)
+  Req 4.2.1 – Strong cryptography in transit (TLS 1.2+, enforced at APIM SKU level)
+  Req 6.4   – Address common software vulnerabilities in public-facing web apps
+  Req 7     – Restrict access to system components / cardholder data
+  Req 12.3  – Protect all CHD in external-facing APIs
+
+SCOPE:
+  Apply to ALL API products that touch payment-related data.
+  Chain with pci-dss-audit-logging.xml using <base/> at each section.
+
+IMPORTANT — SEMANTIC CACHING:
+  Do NOT apply semantic-caching.xml to any PCI-scoped API operation.
+  Cached AI responses may contain CHD context and violate Req 3.
+
+IMPORTANT — TOKEN QUOTA LOGGING:
+  Ensure token-quota-by-department.xml does not emit raw request bodies
+  to Event Hub for PCI-scoped operations (bodies must be pre-sanitized).
+-->
+
+<policies>
+  <!-- ============================================================
+       INBOUND — Block raw CHD before it reaches the AI model
+       ============================================================ -->
+  <inbound>
+
+    <!-- PCI DSS Req 4.2.1: Reject any non-TLS connection at policy level
+         (APIM Premium with customProperties also enforces at gateway level;
+          this provides an explicit, logged rejection.) -->
+    <choose>
+      <when condition="@(context.Request.OriginalUrl.Scheme != "https")">
+        <return-response>
+          <set-status code="403" reason="Forbidden" />
+          <set-header name="Content-Type" value="application/json" />
+          <set-body>@{
+            return JsonConvert.SerializeObject(new {
+              error = "TLS_REQUIRED",
+              message = "PCI DSS Req 4.2.1: All connections must use TLS 1.2 or higher. Plain HTTP is not permitted.",
+              pci_requirement = "PCI DSS v4.0 Requirement 4.2.1"
+            });
+          }</set-body>
+        </return-response>
+      </when>
+    </choose>
+
+    <!-- Read the full request body for PAN scanning.
+         preserveContent:true allows the backend to still read the body. -->
+    <set-variable name="pci-request-body"
+                  value="@(context.Request.Body?.As<string>(preserveContent: true) ?? string.Empty)" />
+
+    <!-- PAN detection regex — covers:
+           Visa:             4[0-9]{12}(?:[0-9]{3})?
+           Mastercard:       (?:5[1-5][0-9]{2}|222[1-9]|22[3-9][0-9]|2[3-6][0-9]{2}|27[01][0-9]|2720)[0-9]{12}
+           Amex:             3[47][0-9]{13}
+           Diners Club:      3(?:0[0-5]|[68][0-9])[0-9]{11}
+           Discover:         6(?:011|5[0-9]{2})[0-9]{12}
+           JCB:              (?:2131|1800|35\d{3})\d{11}
+         Spaces and hyphens between digit groups are also matched.
+         Luhn validation improves accuracy but requires a helper function —
+         use your API Management Named Value or a backend API for that. -->
+    <set-variable name="pci-pan-detected" value="@{
+      var body = (string)context.Variables["pci-request-body"];
+      // Strip spaces and hyphens for uniform matching
+      var normalized = System.Text.RegularExpressions.Regex.Replace(body, @"[\s\-]", string.Empty);
+      var panPattern = new System.Text.RegularExpressions.Regex(
+        @"\b(?:4[0-9]{12}(?:[0-9]{3,4})?|(?:5[1-5][0-9]{2}|222[1-9]|22[3-9][0-9]|2[3-6][0-9]{2}|27[01][0-9]|2720)[0-9]{12}|3[47][0-9]{13}|3(?:0[0-5]|[68][0-9])[0-9]{11}|6(?:011|5[0-9]{2})[0-9]{12}|(?:2131|1800|35\d{3})\d{11})\b",
+        System.Text.RegularExpressions.RegexOptions.None
+      );
+      return panPattern.IsMatch(normalized);
+    }" />
+
+    <!-- PCI DSS Req 3.3 / 3.4: Block the request if a raw PAN is detected.
+         Callers must tokenize CHD in a QSA-scoped tokenization service first. -->
+    <choose>
+      <when condition="@((bool)context.Variables["pci-pan-detected"])">
+        <return-response>
+          <set-status code="422" reason="Unprocessable Entity" />
+          <set-header name="Content-Type" value="application/json" />
+          <set-header name="X-PCI-DSS-Block-Reason" value="PAN_DETECTED" />
+          <set-body>@{
+            return JsonConvert.SerializeObject(new {
+              error = "PCI_DSS_VIOLATION",
+              code = "RAW_PAN_IN_REQUEST",
+              message = "Raw cardholder data (PAN) was detected in the request body. " +
+                        "AI model backends are outside PCI DSS scope. " +
+                        "You must tokenize cardholder data before calling this API.",
+              remediation_steps = new[] {
+                "1. Pass the raw PAN to your PCI-scoped tokenization service (e.g., payment vault)",
+                "2. Receive an opaque token (e.g., 'tok_4111_xxxx_1111') in return",
+                "3. Use that token in your AI prompt — never the raw PAN",
+                "4. De-tokenize only in your PCI-scoped system after the AI response",
+                "5. Validate token format with your tokenization provider before retrying"
+              },
+              pci_requirements = new[] {
+                "PCI DSS v4.0 Req 3.3 — Sensitive authentication data not retained post-authorization",
+                "PCI DSS v4.0 Req 3.4 — PAN unreadable wherever stored/transmitted",
+                "PCI DSS v4.0 Req 4.2.1 — Strong cryptography in transit"
+              },
+              correlation_id = context.RequestId,
+              timestamp = DateTime.UtcNow.ToString("o")
+            });
+          }</set-body>
+        </return-response>
+      </when>
+    </choose>
+
+    <!-- Also scan for CVV/CVC patterns (PCI DSS Req 3.3: never store SAD) -->
+    <set-variable name="pci-cvv-detected" value="@{
+      var body = (string)context.Variables["pci-request-body"];
+      // Look for typical CVV/CVC label + 3-4 digit value patterns
+      var cvvPattern = new System.Text.RegularExpressions.Regex(
+        @"(?:cvv|cvc|csc|cvv2|cvc2|card.?security.?code|security.?code)[^\d]{0,10}\d{3,4}",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase
+      );
+      return cvvPattern.IsMatch(body);
+    }" />
+
+    <choose>
+      <when condition="@((bool)context.Variables["pci-cvv-detected"])">
+        <return-response>
+          <set-status code="422" reason="Unprocessable Entity" />
+          <set-header name="Content-Type" value="application/json" />
+          <set-header name="X-PCI-DSS-Block-Reason" value="CVV_DETECTED" />
+          <set-body>@{
+            return JsonConvert.SerializeObject(new {
+              error = "PCI_DSS_VIOLATION",
+              code = "CVV_IN_REQUEST",
+              message = "Card security code (CVV/CVC) detected in request. " +
+                        "PCI DSS prohibits storing, transmitting, or sending CVV/CVC data to any non-PCI-scoped system.",
+              pci_requirement = "PCI DSS v4.0 Requirement 3.3.1",
+              correlation_id = context.RequestId,
+              timestamp = DateTime.UtcNow.ToString("o")
+            });
+          }</set-body>
+        </return-response>
+      </when>
+    </choose>
+
+    <!-- Set a context variable so downstream policies / logging know this is a PCI request -->
+    <set-variable name="pci-scoped" value="true" />
+
+    <!-- PCI DSS Req 7: Verify caller has a valid, least-privilege subscription -->
+    <!-- Note: JWT validation is handled in auth-header-validation.xml.
+         For PCI-scoped APIs, additionally require the 'pci-payment' scope claim. -->
+    <set-variable name="pci-jwt-claims" value="@{
+      var jwt = context.Request.Headers.GetValueOrDefault("Authorization", string.Empty);
+      if (jwt.StartsWith("Bearer ")) {
+        try {
+          var token = jwt.Substring(7);
+          var parts = token.Split('.');
+          if (parts.Length == 3) {
+            var payload = System.Text.Encoding.UTF8.GetString(
+              Convert.FromBase64String(parts[1].PadRight(parts[1].Length + (4 - parts[1].Length % 4) % 4, '=')));
+            return payload;
+          }
+        } catch { }
+      }
+      return "{}";
+    }" />
+
+    <!-- Record clean (non-CHD) request metadata for audit trail -->
+    <set-variable name="pci-audit-request-id" value="@(context.RequestId)" />
+    <set-variable name="pci-audit-client-ip" value="@(context.Request.IpAddress)" />
+    <set-variable name="pci-audit-user" value="@(context.User?.Id ?? "anonymous")" />
+    <set-variable name="pci-audit-subscription" value="@(context.Subscription?.Id ?? "none")" />
+
+  </inbound>
+
+  <!-- ============================================================
+       BACKEND — Forward clean (CHD-free) request to AI model
+       ============================================================ -->
+  <backend>
+    <forward-request />
+  </backend>
+
+  <!-- ============================================================
+       OUTBOUND — Mask any PAN that leaks into the AI response
+       (defense-in-depth; ideally the inbound block above prevents CHD ever reaching the model)
+       ============================================================ -->
+  <outbound>
+
+    <!-- Read AI model response body -->
+    <set-variable name="pci-response-body"
+                  value="@(context.Response.Body?.As<string>(preserveContent: true) ?? string.Empty)" />
+
+    <!-- PCI DSS Req 3.4: Mask any PAN that appears in the response.
+         Retain first 6 and last 4 digits per PCI DSS masking standard. -->
+    <set-variable name="pci-masked-response" value="@{
+      var body = (string)context.Variables["pci-response-body"];
+      var panPattern = new System.Text.RegularExpressions.Regex(
+        @"\b(?:4[0-9]{12}(?:[0-9]{3,4})?|(?:5[1-5][0-9]{2}|222[1-9]|22[3-9][0-9]|2[3-6][0-9]{2}|27[01][0-9]|2720)[0-9]{12}|3[47][0-9]{13}|3(?:0[0-5]|[68][0-9])[0-9]{11}|6(?:011|5[0-9]{2})[0-9]{12}|(?:2131|1800|35\d{3})\d{11})\b",
+        System.Text.RegularExpressions.RegexOptions.None
+      );
+      return panPattern.Replace(body, m => {
+        var pan = System.Text.RegularExpressions.Regex.Replace(m.Value, @"[\s\-]", string.Empty);
+        // Keep first 6 (BIN) and last 4 per PCI DSS 3.4 masking standard
+        if (pan.Length >= 10) {
+          return pan.Substring(0, 6) + new string('*', pan.Length - 10) + pan.Substring(pan.Length - 4);
+        }
+        return new string('*', pan.Length);
+      });
+    }" />
+
+    <!-- Overwrite response body with masked version -->
+    <set-body>@((string)context.Variables["pci-masked-response"])</set-body>
+
+    <!-- PCI DSS Req 3.5: Never allow caching of PCI-scoped responses -->
+    <set-header name="Cache-Control" value="no-store, no-cache, must-revalidate, private" exists-action="override" />
+    <set-header name="Pragma" value="no-cache" exists-action="override" />
+    <set-header name="Surrogate-Control" value="no-store" exists-action="override" />
+    <set-header name="Expires" value="0" exists-action="override" />
+
+    <!-- PCI DSS Req 6.4 / 6.5: Enforce security response headers -->
+    <set-header name="Strict-Transport-Security" value="max-age=31536000; includeSubDomains; preload" exists-action="override" />
+    <set-header name="X-Content-Type-Options" value="nosniff" exists-action="override" />
+    <set-header name="X-Frame-Options" value="DENY" exists-action="override" />
+    <set-header name="Referrer-Policy" value="no-referrer" exists-action="override" />
+    <set-header name="Content-Security-Policy" value="default-src 'none'" exists-action="override" />
+    <set-header name="Permissions-Policy" value="camera=(), microphone=(), geolocation=()" exists-action="override" />
+
+    <!-- Remove headers that leak server / infrastructure information (PCI DSS Req 6.4) -->
+    <set-header name="X-Powered-By" exists-action="delete" />
+    <set-header name="Server" exists-action="delete" />
+    <set-header name="X-AspNet-Version" exists-action="delete" />
+    <set-header name="X-APIM-Backend-Region" exists-action="delete" />
+
+    <!-- Confirm PCI DSS controls were applied (for client-side compliance verification) -->
+    <set-header name="X-PCI-DSS-Policy" value="CHD-Protected" exists-action="override" />
+
+  </outbound>
+
+  <!-- ============================================================
+       ON-ERROR — Return sanitized error; do NOT leak CHD or stack traces
+       ============================================================ -->
+  <on-error>
+
+    <!-- Strip any existing body that might contain CHD or stack traces -->
+    <set-header name="Content-Type" value="application/json" exists-action="override" />
+    <set-header name="X-PCI-DSS-Policy" value="CHD-Protected" exists-action="override" />
+    <set-header name="Cache-Control" value="no-store, no-cache, must-revalidate, private" exists-action="override" />
+
+    <set-body>@{
+      // Return a generic, CHD-safe error response
+      // Do NOT include context.LastError.Message — it may contain CHD
+      return JsonConvert.SerializeObject(new {
+        error = "PROCESSING_ERROR",
+        message = "An error occurred processing your request. No cardholder data has been retained.",
+        correlation_id = context.RequestId,
+        timestamp = DateTime.UtcNow.ToString("o"),
+        support = "Contact your platform administrator and reference the correlation_id above."
+      });
+    }</set-body>
+
+  </on-error>
+</policies>

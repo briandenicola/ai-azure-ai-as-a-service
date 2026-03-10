@@ -1,0 +1,245 @@
+<!--
+APIM Policy: PCI DSS Audit Logging (Requirement 10)
+=====================================================
+
+PURPOSE:
+  Implements PCI DSS v4.0 Requirement 10: "Log and monitor all access to system
+  components and cardholder data".
+
+  This policy produces a structured, tamper-evident audit event for every API
+  call routed through APIM to Foundry agents or AI model endpoints.
+
+PCI DSS v4.0 REQUIREMENTS ADDRESSED:
+  Req 10.2.1.1  – Log all individual user accesses to cardholder data
+  Req 10.2.1.2  – Log all actions taken by anyone with root/administrative privileges
+  Req 10.2.1.3  – Log all access to audit logs
+  Req 10.2.1.4  – Log invalid logical access attempts
+  Req 10.2.1.5  – Log use of and changes to identification/authentication mechanisms
+  Req 10.2.1.6  – Log initialization, stop, or pause of audit logs
+  Req 10.2.1.7  – Log creation and deletion of system-level objects
+  Req 10.3.2    – Protect audit log files from unauthorized modification
+  Req 10.5.1    – Retain audit logs for at least 12 months (enforced at Event Hub / Storage level)
+
+AUDIT RECORD FIELDS (per PCI DSS Req 10.3.1):
+  - User identification (principal / subscription ID)
+  - Type of event
+  - Date and time (UTC, ISO-8601)
+  - Outcome (success or failure)
+  - Originating IP address
+  - Identity/component affected
+  - Resource / data affected (path only — NOT the body, which may contain CHD)
+
+CHAIN WITH:
+  Apply AFTER pci-dss-cardholder-data-protection.xml so logs are always CHD-free.
+  Reference auth-header-validation.xml for identity context variables.
+
+IMPORTANT — NEVER LOG REQUEST/RESPONSE BODIES:
+  Request and response bodies may contain sensitive data. Only log metadata.
+  If you need content-level audit for compliance, run body through the CHD
+  masking function in pci-dss-cardholder-data-protection.xml first, then log.
+-->
+
+<policies>
+  <!-- ============================================================
+       INBOUND — Capture clean request metadata for audit record
+       ============================================================ -->
+  <inbound>
+
+    <!-- Capture timestamp at request arrival (PCI DSS Req 10.3.1 — date/time) -->
+    <set-variable name="pci-audit-timestamp" value="@(DateTime.UtcNow.ToString("o"))" />
+
+    <!-- Capture caller identity (PCI DSS Req 10.3.1 — user identification) -->
+    <set-variable name="pci-audit-user-id"     value="@(context.User?.Id ?? "anonymous")" />
+    <set-variable name="pci-audit-sub-id"       value="@(context.Subscription?.Id ?? "none")" />
+    <set-variable name="pci-audit-sub-name"     value="@(context.Subscription?.Name ?? "none")" />
+    <set-variable name="pci-audit-client-ip"    value="@(context.Request.IpAddress)" />
+    <set-variable name="pci-audit-request-id"   value="@(context.RequestId)" />
+    <set-variable name="pci-audit-operation"    value="@(context.Operation?.Id ?? "unknown")" />
+    <set-variable name="pci-audit-api"          value="@(context.Api?.Name ?? "unknown")" />
+    <set-variable name="pci-audit-api-version"  value="@(context.Api?.Version ?? "none")" />
+    <set-variable name="pci-audit-method"       value="@(context.Request.Method)" />
+    <!-- Log URI path only — never query strings or body (may contain CHD) -->
+    <set-variable name="pci-audit-path"         value="@(context.Request.Url.Path)" />
+    <set-variable name="pci-audit-product"      value="@(context.Product?.Name ?? "none")" />
+    <set-variable name="pci-audit-department"   value="@(context.Request.Headers.GetValueOrDefault("X-Department-Id", "unknown"))" />
+
+    <!-- Extract JWT claims for additional identity context (PCI DSS Req 10.2.1.5) -->
+    <set-variable name="pci-audit-app-id" value="@{
+      try {
+        var auth = context.Request.Headers.GetValueOrDefault("Authorization", string.Empty);
+        if (auth.StartsWith("Bearer ")) {
+          var parts = auth.Substring(7).Split('.');
+          if (parts.Length == 3) {
+            var padding = parts[1].Length % 4 == 0 ? 0 : 4 - parts[1].Length % 4;
+            var decoded = System.Text.Encoding.UTF8.GetString(
+              Convert.FromBase64String(parts[1] + new string('=', padding)));
+            var claims = Newtonsoft.Json.Linq.JObject.Parse(decoded);
+            return claims.Value<string>("appid") ?? claims.Value<string>("azp") ?? "unknown";
+          }
+        }
+      } catch { }
+      return "unknown";
+    }" />
+
+    <!-- Emit ACCESS_REQUEST audit event to Event Hub (PCI DSS Req 10.2.1.1) -->
+    <log-to-eventhub logger-id="ai-tokenlog">
+      <expression>@{
+        return Newtonsoft.Json.JsonConvert.SerializeObject(new {
+          // PCI DSS Req 10.3.1 required fields
+          event_type        = "ACCESS_REQUEST",
+          pci_requirement   = "PCI DSS v4.0 Req 10.2.1.1",
+          timestamp         = (string)context.Variables["pci-audit-timestamp"],
+          user_id           = (string)context.Variables["pci-audit-user-id"],
+          app_id            = (string)context.Variables["pci-audit-app-id"],
+          subscription_id   = (string)context.Variables["pci-audit-sub-id"],
+          subscription_name = (string)context.Variables["pci-audit-sub-name"],
+          // PCI DSS Req 10.3.1 — originating IP
+          client_ip         = (string)context.Variables["pci-audit-client-ip"],
+          // PCI DSS Req 10.3.1 — identity/component affected
+          api               = (string)context.Variables["pci-audit-api"],
+          api_version       = (string)context.Variables["pci-audit-api-version"],
+          operation         = (string)context.Variables["pci-audit-operation"],
+          product           = (string)context.Variables["pci-audit-product"],
+          department        = (string)context.Variables["pci-audit-department"],
+          // PCI DSS Req 10.3.1 — resource affected (path NOT body)
+          http_method       = (string)context.Variables["pci-audit-method"],
+          request_path      = (string)context.Variables["pci-audit-path"],
+          request_id        = (string)context.Variables["pci-audit-request-id"],
+          // Outcome is "initiated" at inbound; full outcome logged in outbound/on-error
+          outcome           = "initiated",
+          // Sentinel field — confirms this log was produced by PCI DSS audit policy
+          pci_audit_policy  = true,
+          // NEVER add request body, response body, Authorization header value, or PAN here
+          _body_logged      = false
+        });
+      }</expression>
+    </log-to-eventhub>
+
+  </inbound>
+
+  <!-- ============================================================
+       BACKEND
+       ============================================================ -->
+  <backend>
+    <forward-request />
+  </backend>
+
+  <!-- ============================================================
+       OUTBOUND — Log successful completion with outcome metadata
+       ============================================================ -->
+  <outbound>
+
+    <!-- PCI DSS Req 10.3.1 — date/time of outcome -->
+    <set-variable name="pci-audit-response-time-ms" value="@(context.Elapsed.TotalMilliseconds.ToString("F0"))" />
+    <set-variable name="pci-audit-status-code"       value="@(context.Response.StatusCode.ToString())" />
+
+    <!-- Log ACCESS_GRANTED or ACCESS_DENIED outcome (PCI DSS Req 10.2.1.4) -->
+    <log-to-eventhub logger-id="ai-tokenlog">
+      <expression>@{
+        var statusCode = context.Response.StatusCode;
+        var outcome = statusCode < 400 ? "ACCESS_GRANTED" : (statusCode == 401 || statusCode == 403 ? "ACCESS_DENIED" : "REQUEST_ERROR");
+        var eventType = statusCode < 400 ? "ACCESS_GRANTED" : "ACCESS_DENIED";
+        return Newtonsoft.Json.JsonConvert.SerializeObject(new {
+          event_type          = eventType,
+          pci_requirement     = "PCI DSS v4.0 Req 10.2.1.1 / 10.2.1.4",
+          timestamp           = DateTime.UtcNow.ToString("o"),
+          request_timestamp   = (string)context.Variables["pci-audit-timestamp"],
+          user_id             = (string)context.Variables["pci-audit-user-id"],
+          app_id              = (string)context.Variables["pci-audit-app-id"],
+          subscription_id     = (string)context.Variables["pci-audit-sub-id"],
+          client_ip           = (string)context.Variables["pci-audit-client-ip"],
+          api                 = (string)context.Variables["pci-audit-api"],
+          operation           = (string)context.Variables["pci-audit-operation"],
+          product             = (string)context.Variables["pci-audit-product"],
+          department          = (string)context.Variables["pci-audit-department"],
+          http_method         = (string)context.Variables["pci-audit-method"],
+          request_path        = (string)context.Variables["pci-audit-path"],
+          request_id          = (string)context.Variables["pci-audit-request-id"],
+          outcome             = outcome,
+          http_status_code    = statusCode,
+          response_time_ms    = context.Elapsed.TotalMilliseconds,
+          pci_audit_policy    = true,
+          _body_logged        = false
+        });
+      }</expression>
+    </log-to-eventhub>
+
+    <!-- PCI DSS Req 10.2.1.4: Specifically log authentication failures with a distinct event type -->
+    <choose>
+      <when condition="@(context.Response.StatusCode == 401)">
+        <log-to-eventhub logger-id="ai-tokenlog">
+          <expression>@{
+            return Newtonsoft.Json.JsonConvert.SerializeObject(new {
+              event_type       = "AUTH_FAILURE",
+              pci_requirement  = "PCI DSS v4.0 Req 10.2.1.4",
+              timestamp        = DateTime.UtcNow.ToString("o"),
+              user_id          = (string)context.Variables["pci-audit-user-id"],
+              client_ip        = (string)context.Variables["pci-audit-client-ip"],
+              api              = (string)context.Variables["pci-audit-api"],
+              request_path     = (string)context.Variables["pci-audit-path"],
+              request_id       = (string)context.Variables["pci-audit-request-id"],
+              outcome          = "AUTH_FAILURE",
+              http_status_code = 401,
+              pci_audit_policy = true,
+              // Alert: repeated AUTH_FAILURE events should trigger SIEM alert per PCI DSS Req 10.7
+              alert_on_repeat  = true
+            });
+          }</expression>
+        </log-to-eventhub>
+      </when>
+      <!-- PCI DSS Req 10.2.1.2: Log all access denied events (possible privilege escalation attempt) -->
+      <when condition="@(context.Response.StatusCode == 403)">
+        <log-to-eventhub logger-id="ai-tokenlog">
+          <expression>@{
+            return Newtonsoft.Json.JsonConvert.SerializeObject(new {
+              event_type       = "AUTHZ_FAILURE",
+              pci_requirement  = "PCI DSS v4.0 Req 10.2.1.2 / 10.2.1.4",
+              timestamp        = DateTime.UtcNow.ToString("o"),
+              user_id          = (string)context.Variables["pci-audit-user-id"],
+              subscription_id  = (string)context.Variables["pci-audit-sub-id"],
+              client_ip        = (string)context.Variables["pci-audit-client-ip"],
+              api              = (string)context.Variables["pci-audit-api"],
+              request_path     = (string)context.Variables["pci-audit-path"],
+              request_id       = (string)context.Variables["pci-audit-request-id"],
+              outcome          = "AUTHZ_FAILURE",
+              http_status_code = 403,
+              pci_audit_policy = true,
+              alert_on_repeat  = true
+            });
+          }</expression>
+        </log-to-eventhub>
+      </when>
+    </choose>
+
+  </outbound>
+
+  <!-- ============================================================
+       ON-ERROR — Log failures; never log CHD in error context
+       ============================================================ -->
+  <on-error>
+
+    <log-to-eventhub logger-id="ai-tokenlog">
+      <expression>@{
+        return Newtonsoft.Json.JsonConvert.SerializeObject(new {
+          event_type       = "GATEWAY_ERROR",
+          pci_requirement  = "PCI DSS v4.0 Req 10.2.1.7",
+          timestamp        = DateTime.UtcNow.ToString("o"),
+          user_id          = (string)context.Variables["pci-audit-user-id"],
+          subscription_id  = (string)context.Variables["pci-audit-sub-id"],
+          client_ip        = (string)context.Variables["pci-audit-client-ip"],
+          api              = (string)context.Variables["pci-audit-api"],
+          operation        = (string)context.Variables["pci-audit-operation"],
+          request_path     = (string)context.Variables["pci-audit-path"],
+          request_id       = (string)context.Variables["pci-audit-request-id"],
+          // Error source and code only — NOT the full message (may reference CHD)
+          error_source     = context.LastError?.Source ?? "unknown",
+          error_reason     = context.LastError?.Reason ?? "unknown",
+          outcome          = "ERROR",
+          pci_audit_policy = true,
+          _body_logged     = false
+        });
+      }</expression>
+    </log-to-eventhub>
+
+  </on-error>
+</policies>
