@@ -216,7 +216,96 @@
 
     {
       "type": 1,
-      "content": { "json": "## App Insights Transaction Search Link\n\nFor a **single-request drill-down** (every span on one timeline similar to Jaeger), set the **Correlation ID** parameter above, then copy the `opId` value from the trace table and paste it into [App Insights â†’ Transaction Search](https://portal.azure.com) (`operation_Id = <opId>`). This shows the W3C-correlated APIM frontend span, APIMâ†’Foundry dependency span, and any OpenTelemetry spans your client code emits â€” all linked by the same `operation_Id`." },
+      "content": { "json": "## Request Routing Flow\n\nShows every request in the selected window: which **APIM product tier** it came from, which **Foundry backend** it was routed to, and the status at each hop. Use the **Correlation ID** parameter to narrow to a single client connection." },
+      "name": "section-routing"
+    },
+
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "// Request routing flow: Client → APIM Product → Foundry Backend\n// Exact AGW join: corrId = \"clientIp-clientPort\" matches AGWAccessLogs ClientIp + ClientPort\nlet filter_corrId = \"{CorrelationId}\";\nlet apim = AppRequests\n| where TimeGenerated {TimeRange}\n| extend corrId          = tostring(Properties[\"Request-X-Correlation-Id\"])\n| extend apimProduct     = tostring(Properties[\"Product Name\"])\n| extend apimSub         = tostring(Properties[\"Subscription Name\"])\n| extend apiName         = tostring(Properties[\"API Name\"])\n| where isnotempty(corrId)\n| where filter_corrId == \"\" or corrId == filter_corrId\n| project apimTime=TimeGenerated, corrId, OperationId, apimDurationMs=DurationMs,\n          apimStatus=ResultCode, apimSuccess=Success, apimProduct, apimSub, apiName, Url;\nlet foundry = AppDependencies\n| where TimeGenerated {TimeRange}\n| where Type == \"HTTP\"\n| extend corrId = tostring(Properties[\"Request-X-Correlation-Id\"])\n| where isnotempty(corrId)\n| where filter_corrId == \"\" or corrId == filter_corrId\n| project foundryOpId=OperationId, foundryDurationMs=DurationMs,\n          foundryTarget=Target, foundryStatus=ResultCode, foundrySuccess=Success;\nlet agw = AGWAccessLogs\n| where TimeGenerated {TimeRange}\n| extend corrId = strcat(ClientIp, \"-\", tostring(ClientPort))\n| where filter_corrId == \"\" or corrId == filter_corrId\n| project agwTime=TimeGenerated, corrId,\n          agwTotalMs = toreal(TimeTaken) * 1000,\n          agwStatus=HttpStatus, agwClient=ClientIp;\napim\n| join kind=leftouter (foundry) on $left.OperationId == $right.foundryOpId\n| join kind=leftouter (agw) on corrId\n| extend foundryHost = tostring(split(foundryTarget, \"/\")[2])\n| extend foundryRegion = case(\n    foundryHost contains \"primary\",   \"Primary (East US)\",\n    foundryHost contains \"secondary\", \"Secondary (West US)\",\n    foundryHost)\n| extend apimOverheadMs = max_of(apimDurationMs - iff(isnotempty(foundryDurationMs), foundryDurationMs, 0.0), 0.0)\n| extend agwOverheadMs  = max_of(agwTotalMs - apimDurationMs, 0.0)\n| project\n    Time              = apimTime,\n    ['Corr ID']       = corrId,\n    ['Client IP']     = agwClient,\n    ['Product']       = apimProduct,\n    ['Subscription']  = apimSub,\n    ['→ APIM']        = 'apim-contoso-vdls2xyq',\n    ['→ Foundry']     = foundryRegion,\n    ['AGW (ms)']      = round(agwOverheadMs, 1),\n    ['APIM ovhd (ms)']= round(apimOverheadMs, 1),\n    ['Foundry (ms)']  = round(foundryDurationMs, 1),\n    ['Total (ms)']    = round(agwTotalMs, 1),\n    ['HTTP']          = apimStatus,\n    ['OK']            = apimSuccess\n| sort by Time desc",
+        "size": 1,
+        "title": "Request routing: Client → APIM → Foundry backend",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "formatters": [
+            { "columnMatch": "→ APIM",          "formatter": 5 },
+            { "columnMatch": "→ Foundry",        "formatter": 5 },
+            { "columnMatch": "HTTP",             "formatter": 18, "formatOptions": { "thresholdsOptions": "icons", "thresholdsGrid": [ { "operator": ">=", "thresholdValue": "400", "representation": "failed",  "text": "{0}" }, { "operator": "Default", "thresholdValue": null, "representation": "success","text": "{0}" } ] } },
+            { "columnMatch": "OK",               "formatter": 18, "formatOptions": { "thresholdsOptions": "icons", "thresholdsGrid": [ { "operator": "==", "thresholdValue": "false", "representation": "failed", "text": "" }, { "operator": "Default", "thresholdValue": null, "representation": "success","text": "" } ] } },
+            { "columnMatch": "Total (ms)",       "formatter": 8,  "formatOptions": { "palette": "yellowOrangeRed", "min": 0, "max": 30000 } },
+            { "columnMatch": "AGW (ms)",         "formatter": 8,  "formatOptions": { "palette": "blue",    "min": 0, "max": 5000  } },
+            { "columnMatch": "APIM ovhd (ms)",   "formatter": 8,  "formatOptions": { "palette": "orange",  "min": 0, "max": 5000  } },
+            { "columnMatch": "Foundry (ms)",     "formatter": 8,  "formatOptions": { "palette": "green",   "min": 0, "max": 30000 } },
+            { "columnMatch": "Product",          "formatter": 18, "formatOptions": { "thresholdsOptions": "colors", "thresholdsGrid": [
+              { "operator": "==", "thresholdValue": "ai-bronze", "representation": "#cd7f32", "text": "{0}" },
+              { "operator": "==", "thresholdValue": "ai-silver", "representation": "#c0c0c0", "text": "{0}" },
+              { "operator": "==", "thresholdValue": "ai-gold",   "representation": "#ffd700", "text": "{0}" },
+              { "operator": "Default", "thresholdValue": null,   "representation": "blue",    "text": "{0}" }
+            ]}}
+          ],
+          "rowLimit": 200,
+          "filter": true,
+          "exportedParameters": [
+            {
+              "fieldName": "Corr ID",
+              "parameterName": "CorrelationId",
+              "parameterType": 1
+            }
+          ]
+        }
+      },
+      "name": "routing-table"
+    },
+
+    {
+      "type": 1,
+      "content": { "json": "## Per-Request Waterfall\n\nClick any row in the routing table above to populate the **Correlation ID** parameter, then this panel renders a **3-layer horizontal bar chart** for that specific connection — proportional to time spent in each layer:\n\n- 🔵 **App Gateway** — WAF inspection + TLS termination + routing overhead\n- 🟠 **APIM** — policy execution (auth, quota, caching, logging) overhead after Foundry call returns\n- 🟢 **Foundry** — model inference time at the AI backend\n\n> *The bars are stacked left-to-right in call order. Each request in the selected window is one row.*" },
+      "name": "section-drilldown"
+    },
+
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "// Per-request waterfall: 3-layer horizontal bars\n// Each row = one request. Columns = time in each layer, stacked.\nlet filter_corrId = \"{CorrelationId}\";\nlet apim = AppRequests\n| where TimeGenerated {TimeRange}\n| extend corrId       = tostring(Properties[\"Request-X-Correlation-Id\"])\n| extend apimProduct  = tostring(Properties[\"Product Name\"])\n| where isnotempty(corrId)\n| where filter_corrId == \"\" or corrId == filter_corrId\n| project apimTime=TimeGenerated, corrId, OperationId,\n          apimDurationMs=DurationMs, apimStatus=ResultCode, apimProduct;\nlet foundry = AppDependencies\n| where TimeGenerated {TimeRange}\n| where Type == \"HTTP\"\n| extend corrId = tostring(Properties[\"Request-X-Correlation-Id\"])\n| where isnotempty(corrId)\n| where filter_corrId == \"\" or corrId == filter_corrId\n| project foundryOpId=OperationId, foundryDurationMs=DurationMs,\n          foundryTarget=Target;\nlet agw = AGWAccessLogs\n| where TimeGenerated {TimeRange}\n| extend corrId = strcat(ClientIp, \"-\", tostring(ClientPort))\n| where filter_corrId == \"\" or corrId == filter_corrId\n| project corrId, agwTotalMs = toreal(TimeTaken) * 1000;\napim\n| join kind=leftouter (foundry) on $left.OperationId == $right.foundryOpId\n| join kind=leftouter (agw) on corrId\n| extend foundryMs      = iff(isnotempty(foundryDurationMs), foundryDurationMs, 0.0)\n| extend agwTotal       = iff(isnotempty(agwTotalMs), agwTotalMs, apimDurationMs)\n| extend apimOverheadMs = max_of(apimDurationMs - foundryMs, 0.0)\n| extend agwOverheadMs  = max_of(agwTotal - apimDurationMs, 0.0)\n| extend foundryHost    = tostring(split(foundryTarget, \"/\")[2])\n| extend backend        = case(\n    foundryHost contains \"primary\",   \"→ Primary\",\n    foundryHost contains \"secondary\", \"→ Secondary\",\n    \"→ Foundry\")\n| extend rowLabel = strcat(\n    format_datetime(apimTime, \"HH:mm:ss\"),\n    \" \", apimProduct,\n    \" \", backend,\n    \" [\", tostring(round(agwTotal,0)), \"ms]\")\n| project\n    rowLabel,\n    ['App Gateway (ms)'] = round(agwOverheadMs, 1),\n    ['APIM overhead (ms)'] = round(apimOverheadMs, 1),\n    ['Foundry inference (ms)'] = round(foundryMs, 1)\n| sort by rowLabel asc\n| limit 50",
+        "size": 3,
+        "title": "Per-request latency waterfall — click a row above to filter by Correlation ID",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+        ],
+        "visualization": "barchart",
+        "chartSettings": {
+          "xAxis": "rowLabel",
+          "showLegend": true,
+          "xSettings": { "label": "Request (time · product · backend · total ms)" },
+          "ySettings": { "label": "Milliseconds", "min": 0 },
+          "seriesLabelSettings": [
+            { "seriesName": "App Gateway (ms)",        "color": "blue"   },
+            { "seriesName": "APIM overhead (ms)",      "color": "orange" },
+            { "seriesName": "Foundry inference (ms)",  "color": "green"  }
+          ],
+          "chart": {
+            "type": "bar",
+            "stacking": "normal",
+            "orientation": "horizontal"
+          }
+        }
+      },
+      "name": "waterfall-drilldown"
+    },
+
+    {
+      "type": 1,
+      "content": { "json": "---\n\n**Tip:** The **Correlation ID** parameter box at the top also accepts manual input — paste a value from the trace table `Corr ID` column to isolate a specific client connection across all panels above." },
       "name": "footer"
     }
 
