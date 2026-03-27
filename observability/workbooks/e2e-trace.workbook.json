@@ -1,7 +1,6 @@
 ﻿{
   "version": "Notebook/1.0",
   "items": [
-
     {
       "type": 9,
       "content": {
@@ -17,15 +16,29 @@
             "label": "Time Range",
             "type": 4,
             "isRequired": true,
-            "value": { "durationMs": 14400000 },
+            "value": {
+              "durationMs": 14400000
+            },
             "typeSettings": {
               "selectableValues": [
-                { "durationMs": 300000 },
-                { "durationMs": 900000 },
-                { "durationMs": 1800000 },
-                { "durationMs": 3600000 },
-                { "durationMs": 14400000 },
-                { "durationMs": 86400000 }
+                {
+                  "durationMs": 300000
+                },
+                {
+                  "durationMs": 900000
+                },
+                {
+                  "durationMs": 1800000
+                },
+                {
+                  "durationMs": 3600000
+                },
+                {
+                  "durationMs": 14400000
+                },
+                {
+                  "durationMs": 86400000
+                }
               ]
             }
           },
@@ -37,7 +50,9 @@
             "type": 1,
             "isRequired": false,
             "value": "",
-            "typeSettings": { "createOnLoad": false }
+            "typeSettings": {
+              "createOnLoad": false
+            }
           }
         ],
         "style": "above",
@@ -46,21 +61,20 @@
       },
       "name": "params"
     },
-
     {
       "type": 1,
       "content": {
-        "json": "# AppGW \u2192 APIM \u2192 Azure AI Foundry \u2014 End-to-End Trace\n\nDistributed trace waterfall stitched across three layers via **X-Correlation-Id**:\n\n| Layer | Data Source | Metric |\n|---|---|---|\n| **App Gateway WAF** | `AGWAccessLogs` (Log Analytics) | Total connection time from client |\n| **APIM Gateway** | `AppRequests` (App Insights) | APIM processing + backend call |\n| **Azure AI Foundry** | `AppDependencies` (App Insights) | Foundry model inference time |\n\n**How correlation works:** The App Gateway rewrite rule stamps `X-Correlation-Id: client_ip-client_port` on every forwarded request (Azure App Gateway does not expose a per-request UUID; the TCP source port is unique per active connection, so this pair is unique within any live request window). APIM captures it as `Properties[\"Request-X-Correlation-Id\"]` in App Insights and forwards it to Foundry. The APIM \u2192 Foundry join uses the header value directly. The AppGW row is matched approximately using the client IP from the corrId and the APIM request time binned to 2 seconds.\n\n> Use the **Correlation ID** parameter above to drill into a single request trace."
+        "json": "# AppGW → APIM → Azure AI Foundry — End-to-End Trace\n\nDistributed trace waterfall stitched across three layers via **X-Correlation-Id**:\n\n| Layer | Data Source | Metric |\n|---|---|---|\n| **App Gateway WAF** | `AGWAccessLogs` (Log Analytics) | Total connection time from client |\n| **APIM Gateway** | `AppRequests` (App Insights) | APIM processing + backend call |\n| **Azure AI Foundry** | `AppDependencies` (App Insights) | Foundry model inference time |\n\n**How correlation works:** The App Gateway rewrite rule stamps `X-Correlation-Id: client_ip-client_port` on every forwarded request (Azure App Gateway does not expose a per-request UUID; the TCP source port is unique per active connection, so this pair is unique within any live request window). APIM captures it as `Properties[\"Request-X-Correlation-Id\"]` in App Insights and forwards it to Foundry. The APIM → Foundry join uses the header value directly. The AppGW row is matched approximately using the client IP from the corrId and the APIM request time binned to 2 seconds.\n\n> Use the **Correlation ID** parameter above to drill into a single request trace."
       },
       "name": "header"
     },
-
     {
       "type": 1,
-      "content": { "json": "## Summary" },
+      "content": {
+        "json": "## Summary"
+      },
       "name": "section-summary"
     },
-
     {
       "type": 3,
       "content": {
@@ -75,22 +89,34 @@
         ],
         "visualization": "tiles",
         "tileSettings": {
-          "titleContent":     { "columnMatch": "Metric",  "formatter": 1 },
-          "leftContent":      { "columnMatch": "Value",   "formatter": 12, "formatOptions": { "palette": "auto" } },
-          "secondaryContent": { "columnMatch": "Sub",     "formatter": 1 },
+          "titleContent": {
+            "columnMatch": "Metric",
+            "formatter": 1
+          },
+          "leftContent": {
+            "columnMatch": "Value",
+            "formatter": 12,
+            "formatOptions": {
+              "palette": "auto"
+            }
+          },
+          "secondaryContent": {
+            "columnMatch": "Sub",
+            "formatter": 1
+          },
           "showBorder": true,
           "size": "auto"
         }
       },
       "name": "tiles-summary"
     },
-
     {
       "type": 1,
-      "content": { "json": "## Per-Layer Latency Waterfall\n\nEach bar represents **average time spent in that layer** for requests in the selected time window. APIM overhead = `APIM duration âˆ’ Foundry duration`." },
+      "content": {
+        "json": "## Per-Layer Latency Waterfall\n\nEach bar represents **average time spent in that layer** for requests in the selected time window. APIM overhead = `APIM duration âˆ’ Foundry duration`."
+      },
       "name": "section-waterfall"
     },
-
     {
       "type": 3,
       "content": {
@@ -106,28 +132,42 @@
         "visualization": "barchart",
         "chartSettings": {
           "seriesLabelSettings": [
-            { "seriesName": "App GW overhead",  "color": "blue"   },
-            { "seriesName": "APIM overhead",    "color": "orange" },
-            { "seriesName": "Foundry inference","color": "green"  }
+            {
+              "seriesName": "App GW overhead",
+              "color": "blue"
+            },
+            {
+              "seriesName": "APIM overhead",
+              "color": "orange"
+            },
+            {
+              "seriesName": "Foundry inference",
+              "color": "green"
+            }
           ],
-          "xSettings": { "label": "Time" },
-          "ySettings": { "label": "Milliseconds", "min": 0 }
+          "xSettings": {
+            "label": "Time"
+          },
+          "ySettings": {
+            "label": "Milliseconds",
+            "min": 0
+          }
         }
       },
       "name": "waterfall-chart"
     },
-
     {
       "type": 1,
-      "content": { "json": "## Full App Gateway + APIM Join\n\nMatches each `AppRequests` row to its `AGWAccessLogs` entry via an **approximate join**: client IP is extracted from the corrId (`client_ip-client_port`) and matched against `AGWAccessLogs` within a 2-second time bucket centred on the APIM request start time.\n\n> Azure Application Gateway does not expose a per-request UUID server variable. The TCP source port + client IP pair is unique for any active connection. Within a 2-second window with the same client IP the closest AGW entry is matched." },
+      "content": {
+        "json": "## Full App Gateway + APIM Join\n\nMatches each `AppRequests` row to its `AGWAccessLogs` entry via an **approximate join**: client IP is extracted from the corrId (`client_ip-client_port`) and matched against `AGWAccessLogs` within a 2-second time bucket centred on the APIM request start time.\n\n> Azure Application Gateway does not expose a per-request UUID server variable. The TCP source port + client IP pair is unique for any active connection. Within a 2-second window with the same client IP the closest AGW entry is matched."
+      },
       "name": "section-join"
     },
-
     {
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "// Full 3-layer trace table: AGW â†’ APIM â†’ Foundry\n// corrId format: \"client_ip-client_port\" stamped by AppGW rewrite rule.\n// APIM â†’ Foundry: direct join on the shared corrId header value.\n// AppGW â†’ APIM:   approximate join using client IP (from corrId) + APIM start time binned to 2s.\nlet filter_corrId = \"{CorrelationId}\";\nlet apimRows = AppRequests\n| where TimeGenerated {TimeRange}\n| extend corrId = tostring(Properties[\"Request-X-Correlation-Id\"])\n| where isnotempty(corrId)\n| where filter_corrId == \"\" or corrId == filter_corrId\n| project\n    corrId,\n    opId             = OperationId,\n    apimStart        = TimeGenerated,\n    apimDurationMs   = DurationMs,\n    httpStatus       = ResultCode,\n    success          = Success,\n    url              = Url,\n    apimProduct      = tostring(Properties[\"Product Name\"]),\n    apimSubscription = tostring(Properties[\"Subscription Name\"]);\nlet foundryRows = AppDependencies\n| where TimeGenerated {TimeRange}\n| extend corrId = tostring(Properties[\"Request-X-Correlation-Id\"])\n| where isnotempty(corrId)\n| where filter_corrId == \"\" or corrId == filter_corrId\n| summarize\n    foundryDurationMs = avg(DurationMs),\n    foundryTarget     = any(Target),\n    foundrySuccess    = any(Success)\n    by corrId, opId = OperationId;\nlet agwRows = AGWAccessLogs\n| where TimeGenerated {TimeRange}\n| project\n    agwStart         = TimeGenerated,\n    agwTimeTakenMs   = toreal(TimeTaken) * 1000,\n    agwClientIp      = ClientIp,\n    agwHttpStatus    = HttpStatus,\n    agwSentBytes     = SentBytes,\n    agwReceivedBytes = ReceivedBytes,\n    agwKey           = strcat(ClientIp, \"~\", tostring(bin(TimeGenerated, 2s)));\napimRows\n| join kind=leftouter foundryRows on opId\n// corrId = \"clientIp-port\" â€” extract client IP as join key\n| extend corrClientIp = tostring(split(corrId, \"-\")[0])\n| extend approxKey    = strcat(corrClientIp, \"~\", tostring(bin(apimStart, 2s)))\n| join kind=leftouter agwRows on $left.approxKey == $right.agwKey\n| project-away corrClientIp, approxKey, agwKey\n| extend\n    apimOverheadMs = max_of(apimDurationMs - iff(isnotempty(foundryDurationMs), foundryDurationMs, 0.0), 0.0),\n    agwOverheadMs  = max_of(agwTimeTakenMs - apimDurationMs, 0.0)\n| sort by isnotnull(foundryDurationMs) desc, apimStart desc\n| project\n    Time               = apimStart,\n    ['Correlation ID'] = corrId,\n    ['URL']            = url,\n    ['Status']         = httpStatus,\n    ['Total (ms)']     = round(agwTimeTakenMs, 1),\n    ['AppGW (ms)']     = round(agwOverheadMs, 1),\n    ['APIM (ms)']      = round(apimOverheadMs, 1),\n    ['Foundry (ms)']   = round(foundryDurationMs, 1),\n    ['Foundry backend']= foundryTarget,\n    ['APIM product']   = apimProduct,\n    ['Client IP']      = agwClientIp,\n    ['Success']        = success",
+        "query": "// Full 3-layer trace table: AGW → APIM → Foundry\n// Each layer shows its own HTTP status code and response time.\n// AGW join: approximate via clientIp + 2s time bucket (AGW has no per-request UUID).\nlet filter_corrId = \"{CorrelationId}\";\nlet apimRows = AppRequests\n| where TimeGenerated {TimeRange}\n| extend corrId = tostring(Properties[\"Request-X-Correlation-Id\"])\n| where isnotempty(corrId)\n| where filter_corrId == \"\" or corrId == filter_corrId\n| project\n    corrId,\n    opId             = OperationId,\n    apimStart        = TimeGenerated,\n    apimDurationMs   = DurationMs,\n    apimStatus       = ResultCode,\n    url              = Url,\n    apimProduct      = tostring(Properties[\"Product Name\"]),\n    apimSubscription = tostring(Properties[\"Subscription Name\"]);\nlet foundryRows = AppDependencies\n| where TimeGenerated {TimeRange}\n| extend corrId = tostring(Properties[\"Request-X-Correlation-Id\"])\n| where isnotempty(corrId)\n| where filter_corrId == \"\" or corrId == filter_corrId\n| summarize\n    foundryDurationMs = avg(DurationMs),\n    foundryStatus     = any(ResultCode),\n    foundryTarget     = any(Target)\n    by corrId, opId = OperationId;\nlet agwRows = AGWAccessLogs\n| where TimeGenerated {TimeRange}\n| project\n    agwDurationMs    = toreal(TimeTaken) * 1000,\n    agwStatus        = HttpStatus,\n    agwClientIp      = ClientIp,\n    agwKey           = strcat(ClientIp, \"~\", tostring(bin(TimeGenerated, 2s)));\napimRows\n| join kind=leftouter foundryRows on opId\n| extend corrClientIp = tostring(split(corrId, \"-\")[0])\n| extend approxKey    = strcat(corrClientIp, \"~\", tostring(bin(apimStart, 2s)))\n| join kind=leftouter agwRows on $left.approxKey == $right.agwKey\n| project-away corrClientIp, approxKey, agwKey\n| sort by isnotnull(foundryDurationMs) desc, apimStart desc\n| project\n    Time             = apimStart,\n    ['Corr ID']      = corrId,\n    ['URL']          = url,\n    ['AGW HTTP']     = agwStatus,\n    ['AGW (ms)']     = round(agwDurationMs, 1),\n    ['APIM HTTP']    = apimStatus,\n    ['APIM (ms)']    = round(apimDurationMs, 1),\n    ['Foundry HTTP'] = foundryStatus,\n    ['Foundry (ms)'] = round(foundryDurationMs, 1),\n    ['Product']      = apimProduct,\n    ['Subscription'] = apimSubscription,\n    ['Client IP']    = agwClientIp",
         "size": 1,
         "title": "Per-request trace table (AppGW + APIM + Foundry)",
         "queryType": 0,
@@ -138,26 +178,128 @@
         "visualization": "table",
         "gridSettings": {
           "formatters": [
-            { "columnMatch": "Status",      "formatter": 18, "formatOptions": { "thresholdsOptions": "icons", "thresholdsGrid": [ { "operator": ">=", "thresholdValue": "400", "representation": "failed",   "text": "{0}" }, { "operator": "Default", "thresholdValue": null, "representation": "success", "text": "{0}" } ] } },
-            { "columnMatch": "Success",     "formatter": 18, "formatOptions": { "thresholdsOptions": "icons", "thresholdsGrid": [ { "operator": "==", "thresholdValue": "false", "representation": "failed", "text": "" }, { "operator": "Default", "thresholdValue": null, "representation": "success", "text": "" } ] } },
-            { "columnMatch": "Total (ms)",  "formatter": 8,  "formatOptions": { "palette": "yellowOrangeRed",  "min": 0, "max": 30000 } },
-            { "columnMatch": "AppGW (ms)",  "formatter": 8,  "formatOptions": { "palette": "blue",             "min": 0, "max": 5000  } },
-            { "columnMatch": "APIM (ms)",   "formatter": 8,  "formatOptions": { "palette": "orange",           "min": 0, "max": 5000  } },
-            { "columnMatch": "Foundry (ms)","formatter": 8,  "formatOptions": { "palette": "green",            "min": 0, "max": 30000 } }
+            {
+              "columnMatch": "AGW HTTP",
+              "formatter": 18,
+              "formatOptions": {
+                "thresholdsOptions": "icons",
+                "thresholdsGrid": [
+                  {
+                    "operator": ">=",
+                    "thresholdValue": "500",
+                    "representation": "failed",
+                    "text": "{0}"
+                  },
+                  {
+                    "operator": ">=",
+                    "thresholdValue": "400",
+                    "representation": "warning",
+                    "text": "{0}"
+                  },
+                  {
+                    "operator": "Default",
+                    "thresholdValue": null,
+                    "representation": "success",
+                    "text": "{0}"
+                  }
+                ]
+              }
+            },
+            {
+              "columnMatch": "AGW (ms)",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "blue",
+                "min": 0,
+                "max": 30000
+              }
+            },
+            {
+              "columnMatch": "APIM HTTP",
+              "formatter": 18,
+              "formatOptions": {
+                "thresholdsOptions": "icons",
+                "thresholdsGrid": [
+                  {
+                    "operator": ">=",
+                    "thresholdValue": "500",
+                    "representation": "failed",
+                    "text": "{0}"
+                  },
+                  {
+                    "operator": ">=",
+                    "thresholdValue": "400",
+                    "representation": "warning",
+                    "text": "{0}"
+                  },
+                  {
+                    "operator": "Default",
+                    "thresholdValue": null,
+                    "representation": "success",
+                    "text": "{0}"
+                  }
+                ]
+              }
+            },
+            {
+              "columnMatch": "APIM (ms)",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "orange",
+                "min": 0,
+                "max": 30000
+              }
+            },
+            {
+              "columnMatch": "Foundry HTTP",
+              "formatter": 18,
+              "formatOptions": {
+                "thresholdsOptions": "icons",
+                "thresholdsGrid": [
+                  {
+                    "operator": ">=",
+                    "thresholdValue": "500",
+                    "representation": "failed",
+                    "text": "{0}"
+                  },
+                  {
+                    "operator": ">=",
+                    "thresholdValue": "400",
+                    "representation": "warning",
+                    "text": "{0}"
+                  },
+                  {
+                    "operator": "Default",
+                    "thresholdValue": null,
+                    "representation": "success",
+                    "text": "{0}"
+                  }
+                ]
+              }
+            },
+            {
+              "columnMatch": "Foundry (ms)",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "green",
+                "min": 0,
+                "max": 30000
+              }
+            }
           ],
-          "rowLimit": 100,
+          "rowLimit": 200,
           "filter": true
         }
       },
       "name": "trace-table"
     },
-
     {
       "type": 1,
-      "content": { "json": "## P50 / P95 / P99 Latency by Layer\n\nUse this to identify which layer is the latency bottleneck for your slowest requests." },
+      "content": {
+        "json": "## P50 / P95 / P99 Latency by Layer\n\nUse this to identify which layer is the latency bottleneck for your slowest requests."
+      },
       "name": "section-percentiles"
     },
-
     {
       "type": 3,
       "content": {
@@ -173,22 +315,46 @@
         "visualization": "table",
         "gridSettings": {
           "formatters": [
-            { "columnMatch": "p50", "formatter": 8, "formatOptions": { "palette": "blue",   "min": 0, "max": 5000  } },
-            { "columnMatch": "p95", "formatter": 8, "formatOptions": { "palette": "orange", "min": 0, "max": 15000 } },
-            { "columnMatch": "p99", "formatter": 8, "formatOptions": { "palette": "red",    "min": 0, "max": 30000 } }
+            {
+              "columnMatch": "p50",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "blue",
+                "min": 0,
+                "max": 5000
+              }
+            },
+            {
+              "columnMatch": "p95",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "orange",
+                "min": 0,
+                "max": 15000
+              }
+            },
+            {
+              "columnMatch": "p99",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "red",
+                "min": 0,
+                "max": 30000
+              }
+            }
           ],
           "filter": false
         }
       },
       "name": "percentiles-table"
     },
-
     {
       "type": 1,
-      "content": { "json": "## WAF Firewall Events\n\nAny request **blocked or matched** by the WAF (OWASP CRS 3.2 + Bot Manager). A high matched-but-allowed count may indicate false-positive rules worth tuning." },
+      "content": {
+        "json": "## WAF Firewall Events\n\nAny request **blocked or matched** by the WAF (OWASP CRS 3.2 + Bot Manager). A high matched-but-allowed count may indicate false-positive rules worth tuning."
+      },
       "name": "section-waf"
     },
-
     {
       "type": 3,
       "content": {
@@ -204,8 +370,22 @@
         "visualization": "table",
         "gridSettings": {
           "formatters": [
-            { "columnMatch": "Blocked", "formatter": 8, "formatOptions": { "palette": "red",    "min": 0 } },
-            { "columnMatch": "Matched", "formatter": 8, "formatOptions": { "palette": "orange", "min": 0 } }
+            {
+              "columnMatch": "Blocked",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "red",
+                "min": 0
+              }
+            },
+            {
+              "columnMatch": "Matched",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "orange",
+                "min": 0
+              }
+            }
           ],
           "filter": true,
           "rowLimit": 50
@@ -213,13 +393,13 @@
       },
       "name": "waf-table"
     },
-
     {
       "type": 1,
-      "content": { "json": "## Request Routing Flow\n\nShows every request in the selected window: which **APIM product tier** it came from, which **Foundry backend** it was routed to, and the status at each hop. Use the **Correlation ID** parameter to narrow to a single client connection." },
+      "content": {
+        "json": "## Request Routing Flow\n\nShows every request in the selected window: which **APIM product tier** it came from, which **Foundry backend** it was routed to, and the status at each hop. Use the **Correlation ID** parameter to narrow to a single client connection."
+      },
       "name": "section-routing"
     },
-
     {
       "type": 3,
       "content": {
@@ -235,21 +415,131 @@
         "visualization": "table",
         "gridSettings": {
           "formatters": [
-            { "columnMatch": "→ APIM",          "formatter": 5 },
-            { "columnMatch": "→ Foundry",        "formatter": 5 },
-            { "columnMatch": "HTTP",             "formatter": 18, "formatOptions": { "thresholdsOptions": "icons", "thresholdsGrid": [ { "operator": ">=", "thresholdValue": "400", "representation": "failed",  "text": "{0}" }, { "operator": "Default", "thresholdValue": null, "representation": "success","text": "{0}" } ] } },
-            { "columnMatch": "OK",               "formatter": 18, "formatOptions": { "thresholdsOptions": "icons", "thresholdsGrid": [ { "operator": "==", "thresholdValue": "false", "representation": "failed", "text": "" }, { "operator": "Default", "thresholdValue": null, "representation": "success","text": "" } ] } },
-            { "columnMatch": "Total (ms)",       "formatter": 8,  "formatOptions": { "palette": "yellowOrangeRed", "min": 0, "max": 30000 } },
-            { "columnMatch": "AGW (ms)",         "formatter": 8,  "formatOptions": { "palette": "blue",    "min": 0, "max": 5000  } },
-            { "columnMatch": "APIM ovhd (ms)",   "formatter": 8,  "formatOptions": { "palette": "orange",  "min": 0, "max": 5000  } },
-            { "columnMatch": "Foundry (ms)",     "formatter": 8,  "formatOptions": { "palette": "green",   "min": 0, "max": 30000 } },
-            { "columnMatch": "Product",          "formatter": 18, "formatOptions": { "thresholdsOptions": "colors", "thresholdsGrid": [
-              { "operator": "==", "thresholdValue": "",          "representation": "normal",  "text": "" },
-              { "operator": "==", "thresholdValue": "ai-bronze", "representation": "#cd7f32", "text": "{0}" },
-              { "operator": "==", "thresholdValue": "ai-silver", "representation": "#c0c0c0", "text": "{0}" },
-              { "operator": "==", "thresholdValue": "ai-gold",   "representation": "#ffd700", "text": "{0}" },
-              { "operator": "Default", "thresholdValue": null,   "representation": "normal",  "text": "{0}" }
-            ]}}
+            {
+              "columnMatch": "→ APIM",
+              "formatter": 5
+            },
+            {
+              "columnMatch": "→ Foundry",
+              "formatter": 5
+            },
+            {
+              "columnMatch": "HTTP",
+              "formatter": 18,
+              "formatOptions": {
+                "thresholdsOptions": "icons",
+                "thresholdsGrid": [
+                  {
+                    "operator": ">=",
+                    "thresholdValue": "400",
+                    "representation": "failed",
+                    "text": "{0}"
+                  },
+                  {
+                    "operator": "Default",
+                    "thresholdValue": null,
+                    "representation": "success",
+                    "text": "{0}"
+                  }
+                ]
+              }
+            },
+            {
+              "columnMatch": "OK",
+              "formatter": 18,
+              "formatOptions": {
+                "thresholdsOptions": "icons",
+                "thresholdsGrid": [
+                  {
+                    "operator": "==",
+                    "thresholdValue": "false",
+                    "representation": "failed",
+                    "text": ""
+                  },
+                  {
+                    "operator": "Default",
+                    "thresholdValue": null,
+                    "representation": "success",
+                    "text": ""
+                  }
+                ]
+              }
+            },
+            {
+              "columnMatch": "Total (ms)",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "yellowOrangeRed",
+                "min": 0,
+                "max": 30000
+              }
+            },
+            {
+              "columnMatch": "AGW (ms)",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "blue",
+                "min": 0,
+                "max": 5000
+              }
+            },
+            {
+              "columnMatch": "APIM ovhd (ms)",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "orange",
+                "min": 0,
+                "max": 5000
+              }
+            },
+            {
+              "columnMatch": "Foundry (ms)",
+              "formatter": 8,
+              "formatOptions": {
+                "palette": "green",
+                "min": 0,
+                "max": 30000
+              }
+            },
+            {
+              "columnMatch": "Product",
+              "formatter": 18,
+              "formatOptions": {
+                "thresholdsOptions": "colors",
+                "thresholdsGrid": [
+                  {
+                    "operator": "==",
+                    "thresholdValue": "",
+                    "representation": "normal",
+                    "text": ""
+                  },
+                  {
+                    "operator": "==",
+                    "thresholdValue": "ai-bronze",
+                    "representation": "#cd7f32",
+                    "text": "{0}"
+                  },
+                  {
+                    "operator": "==",
+                    "thresholdValue": "ai-silver",
+                    "representation": "#c0c0c0",
+                    "text": "{0}"
+                  },
+                  {
+                    "operator": "==",
+                    "thresholdValue": "ai-gold",
+                    "representation": "#ffd700",
+                    "text": "{0}"
+                  },
+                  {
+                    "operator": "Default",
+                    "thresholdValue": null,
+                    "representation": "normal",
+                    "text": "{0}"
+                  }
+                ]
+              }
+            }
           ],
           "rowLimit": 200,
           "filter": true,
@@ -264,13 +554,13 @@
       },
       "name": "routing-table"
     },
-
     {
       "type": 1,
-      "content": { "json": "## Per-Request Waterfall\n\nClick any row in the routing table above to populate the **Correlation ID** parameter, then this panel renders a **3-layer horizontal bar chart** for that specific connection — proportional to time spent in each layer:\n\n- 🔵 **App Gateway** — WAF inspection + TLS termination + routing overhead\n- 🟠 **APIM** — policy execution (auth, quota, caching, logging) overhead after Foundry call returns\n- 🟢 **Foundry** — model inference time at the AI backend\n\n> *The bars are stacked left-to-right in call order. Each request in the selected window is one row.*" },
+      "content": {
+        "json": "## Per-Request Waterfall\n\nClick any row in the routing table above to populate the **Correlation ID** parameter, then this panel renders a **3-layer horizontal bar chart** for that specific connection — proportional to time spent in each layer:\n\n- 🔵 **App Gateway** — WAF inspection + TLS termination + routing overhead\n- 🟠 **APIM** — policy execution (auth, quota, caching, logging) overhead after Foundry call returns\n- 🟢 **Foundry** — model inference time at the AI backend\n\n> *The bars are stacked left-to-right in call order. Each request in the selected window is one row.*"
+      },
       "name": "section-drilldown"
     },
-
     {
       "type": 3,
       "content": {
@@ -287,12 +577,26 @@
         "chartSettings": {
           "xAxis": "rowLabel",
           "showLegend": true,
-          "xSettings": { "label": "Request (time · product · backend · total ms)" },
-          "ySettings": { "label": "Milliseconds", "min": 0 },
+          "xSettings": {
+            "label": "Request (time · product · backend · total ms)"
+          },
+          "ySettings": {
+            "label": "Milliseconds",
+            "min": 0
+          },
           "seriesLabelSettings": [
-            { "seriesName": "App Gateway (ms)",        "color": "blue"   },
-            { "seriesName": "APIM overhead (ms)",      "color": "orange" },
-            { "seriesName": "Foundry inference (ms)",  "color": "green"  }
+            {
+              "seriesName": "App Gateway (ms)",
+              "color": "blue"
+            },
+            {
+              "seriesName": "APIM overhead (ms)",
+              "color": "orange"
+            },
+            {
+              "seriesName": "Foundry inference (ms)",
+              "color": "green"
+            }
           ],
           "chart": {
             "type": "bar",
@@ -303,13 +607,13 @@
       },
       "name": "waterfall-drilldown"
     },
-
     {
       "type": 1,
-      "content": { "json": "---\n\n**Tip:** The **Correlation ID** parameter box at the top also accepts manual input — paste a value from the trace table `Corr ID` column to isolate a specific client connection across all panels above." },
+      "content": {
+        "json": "---\n\n**Tip:** The **Correlation ID** parameter box at the top also accepts manual input — paste a value from the trace table `Corr ID` column to isolate a specific client connection across all panels above."
+      },
       "name": "footer"
     }
-
   ],
   "styleSettings": {},
   "$schema": "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json"
