@@ -1,0 +1,4 @@
+# Dependencies for tests/simple.py and tests/test-sdk-endpoint-routing.py
+openai>=1.30.0
+azure-ai-projects>=1.0.0
+azure-identity>=1.16.0

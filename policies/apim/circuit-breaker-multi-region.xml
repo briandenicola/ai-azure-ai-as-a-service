@@ -1,35 +1,43 @@
 <!--
   Circuit Breaker Policy for Multi-Region Failover
   
-  Scenario: Primary Azure OpenAI resource becomes unavailable
+  Scenario: Primary Foundry AIServices account becomes unavailable
   Behavior:
-  1. Try primary endpoint
-  2. If error (429, 500, 503), try secondary endpoint
+  1. Try primary endpoint (East US)
+  2. If error (429, 500, 503), try secondary endpoint (West US)
   3. Track failure count per endpoint
   4. Auto-failover to healthy region
-  
-  Use in: AI-Premium product only (production workloads)
+
+  Endpoint values are injected via APIM Named Values provisioned by apim-gateway.bicep:
+    {{foundry-primary-endpoint}}   â†’ foundryPrimaryEndpoint param (East US AIServices)
+    {{foundry-secondary-endpoint}} â†’ foundrySecondaryEndpoint param (West US AIServices)
+
+  Apply at: API scope on both 'openai-inference' and 'foundry-agents' APIs,
+            or at the 'ai-inference' and 'ai-agents' product scopes.
 -->
 <policies>
     <inbound>
         <base />
         
-        <!-- Set backend endpoints (primary and secondary regions) -->
-        <set-variable name="primaryBackend" value="https://contoso-openai-eastus.openai.azure.com" />
-        <set-variable name="secondaryBackend" value="https://contoso-openai-westus.openai.azure.com" />
+        <!-- Load Foundry endpoint URLs from APIM Named Values.
+             These are set at deploy time from foundry-hub-project.bicep outputs.
+             Using Named Values (not hardcoded URLs) so endpoint changes only
+             require an azd provision re-run, not a policy file edit. -->
+        <set-variable name="primaryBackend" value="{{foundry-primary-endpoint}}" />
+        <set-variable name="secondaryBackend" value="{{foundry-secondary-endpoint}}" />
         
         <!-- Track failure count for circuit breaker -->
-        <cache-lookup-value key="@("circuit-breaker-" + context.Variables["primaryBackend"])" variable-name="primaryFailureCount" />
-        <cache-lookup-value key="@("circuit-breaker-" + context.Variables["secondaryBackend"])" variable-name="secondaryFailureCount" />
+        <cache-lookup-value key="@('circuit-breaker-' + context.Variables['primaryBackend'])" variable-name="primaryFailureCount" />
+        <cache-lookup-value key="@('circuit-breaker-' + context.Variables['secondaryBackend'])" variable-name="secondaryFailureCount" />
         
         <!-- Initialize failure counters if not set -->
         <choose>
-            <when condition="@(context.Variables.ContainsKey("primaryFailureCount") == false)">
+            <when condition="@(context.Variables.ContainsKey('primaryFailureCount') == false)">
                 <set-variable name="primaryFailureCount" value="0" />
             </when>
         </choose>
         <choose>
-            <when condition="@(context.Variables.ContainsKey("secondaryFailureCount") == false)">
+            <when condition="@(context.Variables.ContainsKey('secondaryFailureCount') == false)">
                 <set-variable name="secondaryFailureCount" value="0" />
             </when>
         </choose>
@@ -37,28 +45,28 @@
         <!-- Choose backend based on circuit breaker state -->
         <choose>
             <!-- If primary has failed too many times (> 5 in last 5 min), use secondary -->
-            <when condition="@((int)context.Variables["primaryFailureCount"] >= 5)">
-                <set-backend-service base-url="@((string)context.Variables["secondaryBackend"])" />
+            <when condition="@((int)context.Variables['primaryFailureCount'] >= 5)">
+                <set-backend-service base-url="@((string)context.Variables['secondaryBackend'])" />
                 <set-variable name="selectedBackend" value="secondary" />
             </when>
             <!-- If secondary also failed, force primary (let it recover) -->
-            <when condition="@((int)context.Variables["secondaryFailureCount"] >= 5)">
-                <set-backend-service base-url="@((string)context.Variables["primaryBackend"])" />
+            <when condition="@((int)context.Variables['secondaryFailureCount'] >= 5)">
+                <set-backend-service base-url="@((string)context.Variables['primaryBackend'])" />
                 <set-variable name="selectedBackend" value="primary" />
                 <!-- Reset counters to allow recovery -->
-                <cache-store-value key="@("circuit-breaker-" + context.Variables["primaryBackend"])" value="0" duration="300" />
-                <cache-store-value key="@("circuit-breaker-" + context.Variables["secondaryBackend"])" value="0" duration="300" />
+                <cache-store-value key="@('circuit-breaker-' + context.Variables['primaryBackend'])" value="0" duration="300" />
+                <cache-store-value key="@('circuit-breaker-' + context.Variables['secondaryBackend'])" value="0" duration="300" />
             </when>
             <!-- Default: use primary -->
             <otherwise>
-                <set-backend-service base-url="@((string)context.Variables["primaryBackend"])" />
+                <set-backend-service base-url="@((string)context.Variables['primaryBackend'])" />
                 <set-variable name="selectedBackend" value="primary" />
             </otherwise>
         </choose>
         
         <!-- Add header for debugging -->
         <set-header name="X-APIM-Backend-Region" exists-action="override">
-            <value>@((string)context.Variables["selectedBackend"])</value>
+            <value>@((string)context.Variables['selectedBackend'])</value>
         </set-header>
     </inbound>
     
@@ -67,16 +75,16 @@
         <retry condition="@(context.Response.StatusCode == 429 || context.Response.StatusCode >= 500)" count="1" interval="2" first-fast-retry="true">
             <choose>
                 <!-- If primary failed, try secondary -->
-                <when condition="@((string)context.Variables["selectedBackend"] == "primary")">
-                    <set-backend-service base-url="@((string)context.Variables["secondaryBackend"])" />
+                <when condition="@((string)context.Variables['selectedBackend'] == 'primary')">
+                    <set-backend-service base-url="@((string)context.Variables['secondaryBackend'])" />
                     <set-variable name="selectedBackend" value="secondary" />
                     <set-header name="X-APIM-Backend-Region" exists-action="override">
                         <value>secondary-failover</value>
                     </set-header>
                 </when>
                 <!-- If secondary failed, try primary (in case it recovered) -->
-                <when condition="@((string)context.Variables["selectedBackend"] == "secondary")">
-                    <set-backend-service base-url="@((string)context.Variables["primaryBackend"])" />
+                <when condition="@((string)context.Variables['selectedBackend'] == 'secondary')">
+                    <set-backend-service base-url="@((string)context.Variables['primaryBackend'])" />
                     <set-variable name="selectedBackend" value="primary-recovery" />
                     <set-header name="X-APIM-Backend-Region" exists-action="override">
                         <value>primary-recovery</value>
@@ -94,13 +102,13 @@
         
         <!-- If request succeeded, reset failure counter for used backend -->
         <choose>
-            <when condition="@(context.Response.StatusCode < 400)">
+            <when condition="@(context.Response.StatusCode &lt; 400)">
                 <choose>
-                    <when condition="@(context.Variables["selectedBackend"].ToString().Contains("primary"))">
-                        <cache-store-value key="@("circuit-breaker-" + context.Variables["primaryBackend"])" value="0" duration="300" />
+                    <when condition="@(context.Variables['selectedBackend'].ToString().Contains('primary'))">
+                        <cache-store-value key="@('circuit-breaker-' + context.Variables['primaryBackend'])" value="0" duration="300" />
                     </when>
-                    <when condition="@(context.Variables["selectedBackend"].ToString().Contains("secondary"))">
-                        <cache-store-value key="@("circuit-breaker-" + context.Variables["secondaryBackend"])" value="0" duration="300" />
+                    <when condition="@(context.Variables['selectedBackend'].ToString().Contains('secondary'))">
+                        <cache-store-value key="@('circuit-breaker-' + context.Variables['secondaryBackend'])" value="0" duration="300" />
                     </when>
                 </choose>
             </when>
@@ -108,7 +116,7 @@
         
         <!-- Add region info to response headers -->
         <set-header name="X-Backend-Region-Used" exists-action="override">
-            <value>@((string)context.Variables["selectedBackend"])</value>
+            <value>@((string)context.Variables['selectedBackend'])</value>
         </set-header>
     </outbound>
     
@@ -117,25 +125,25 @@
         
         <!-- Increment failure counter for the backend that failed -->
         <choose>
-            <when condition="@(context.Variables["selectedBackend"].ToString().Contains("primary"))">
-                <set-variable name="newFailureCount" value="@((int)context.Variables["primaryFailureCount"] + 1)" />
-                <cache-store-value key="@("circuit-breaker-" + context.Variables["primaryBackend"])" value="@((int)context.Variables["newFailureCount"])" duration="300" />
+            <when condition="@(context.Variables['selectedBackend'].ToString().Contains('primary'))">
+                <set-variable name="newFailureCount" value="@((int)context.Variables['primaryFailureCount'] + 1)" />
+                <cache-store-value key="@('circuit-breaker-' + context.Variables['primaryBackend'])" value="@((int)context.Variables['newFailureCount'])" duration="300" />
             </when>
-            <when condition="@(context.Variables["selectedBackend"].ToString().Contains("secondary"))">
-                <set-variable name="newFailureCount" value="@((int)context.Variables["secondaryFailureCount"] + 1)" />
-                <cache-store-value key="@("circuit-breaker-" + context.Variables["secondaryBackend"])" value="@((int)context.Variables["newFailureCount"])" duration="300" />
+            <when condition="@(context.Variables['selectedBackend'].ToString().Contains('secondary'))">
+                <set-variable name="newFailureCount" value="@((int)context.Variables['secondaryFailureCount'] + 1)" />
+                <cache-store-value key="@('circuit-breaker-' + context.Variables['secondaryBackend'])" value="@((int)context.Variables['newFailureCount'])" duration="300" />
             </when>
         </choose>
         
         <!-- Log failure to Application Insights -->
-        <log-to-eventhub logger-id="appinsights-logger">
+        <log-to-eventhub logger-id="ai-logger">
 @{
     return new JObject(
         new JProperty("eventType", "CircuitBreakerFailure"),
         new JProperty("timestamp", DateTime.UtcNow.ToString("o")),
-        new JProperty("backend", context.Variables["selectedBackend"]),
+        new JProperty("backend", context.Variables['selectedBackend']),
         new JProperty("statusCode", context.Response.StatusCode),
-        new JProperty("failureCount", context.Variables["newFailureCount"]),
+        new JProperty("failureCount", context.Variables['newFailureCount']),
         new JProperty("subscriptionId", context.Subscription.Id),
         new JProperty("errorMessage", context.LastError?.Message ?? "Unknown error")
     ).ToString();
@@ -153,7 +161,7 @@
                     new JProperty("error", new JObject(
                         new JProperty("code", "CircuitBreakerOpen"),
                         new JProperty("message", "All backend regions are currently unavailable. Please try again in a few minutes."),
-                        new JProperty("region_attempted", context.Variables["selectedBackend"])
+                        new JProperty("region_attempted", context.Variables['selectedBackend'])
                     ))
                 ).ToString();
             }</set-body>

@@ -1,0 +1,89 @@
+# Azure Developer CLI (azd) configuration
+# Run: azd provision   → creates all Azure resources
+# Run: azd deploy      → deploys the automation Function App code
+# Run: azd up          → provision + deploy in one step
+# Run: azd down        → tears down all provisioned resources
+
+name: ai-azure-ai-as-a-service
+
+# ---------------------------------------------------------------------------
+# Bicep infrastructure — four templates, each in its own resource group
+# so that teams can manage them independently and be torn down selectively.
+#
+# Provision order matters: apim-gateway and foundry-hub-project are
+# independent; event-grid-automation depends on apim-gateway outputs
+# (apimResourceId, applicationInsightsConnectionString); managed-grafana
+# depends on apim-gateway (appInsightsResourceId).
+# ---------------------------------------------------------------------------
+infra:
+  provider: bicep
+  path: infrastructure/bicep
+
+# ---------------------------------------------------------------------------
+# Services — the automation Function App is the only deployable service.
+# The other Bicep templates are pure infrastructure with no application code.
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Hooks — run after provision to configure resources that have no ARM API
+# ---------------------------------------------------------------------------
+hooks:
+  preprovision:
+    - shell: pwsh
+      # Register resource providers that may not be enabled in new subscriptions.
+      # az provider register is idempotent — safe to run every time.
+      run: |
+        $providers = @(
+          'Microsoft.LoadTestService'
+          'Microsoft.Batch'
+          'Microsoft.ApiManagement'
+          'Microsoft.CognitiveServices'
+        )
+        foreach ($p in $providers) {
+          $state = az provider show --namespace $p --query registrationState -o tsv 2>$null
+          if ($state -ne 'Registered') {
+            Write-Host "Registering $p ..."
+            az provider register --namespace $p
+          }
+        }
+      interactive: false
+      continueOnError: false
+  postprovision:
+    - shell: pwsh
+      # Grafana MSI → Monitoring Reader (subscription scope).
+      # Done here instead of Bicep to avoid conflicts with Azure-auto-created assignments.
+      # az role assignment create is idempotent when --name is fixed.
+      run: |
+        $sub  = az account show --query id -o tsv 2>$null
+        $grafanaName = "grafana-contoso-ai-$($env:AZURE_ENV_NAME ?? 'dev')"
+        $RG   = $env:AZURE_RESOURCE_GROUP
+        $principalId = az grafana show --name $grafanaName --resource-group $RG --query identity.principalId -o tsv 2>$null
+        if (-not $principalId) {
+          Write-Warning "Could not resolve Grafana MSI — skipping Monitoring Reader assignment."
+        } else {
+          $existing = az role assignment list --scope "/subscriptions/$sub" --role "Monitoring Reader" --assignee $principalId --query "[0].name" -o tsv 2>$null
+          if ($existing) {
+            Write-Host "Monitoring Reader already assigned to Grafana MSI ($existing) — skipping."
+          } else {
+            Write-Host "Assigning Monitoring Reader to Grafana MSI $principalId ..."
+            az role assignment create --scope "/subscriptions/$sub" --role "Monitoring Reader" --assignee $principalId --assignee-principal-type ServicePrincipal 2>$null
+          }
+        }
+      interactive: false
+      continueOnError: true
+    - shell: pwsh
+      run: scripts/configure-load-test.ps1
+      interactive: false
+      continueOnError: true   # don't fail the entire provision if ALT setup fails
+
+# ---------------------------------------------------------------------------
+# Services — the automation Function App is the only deployable service.
+# The other Bicep templates are pure infrastructure with no application code.
+# ---------------------------------------------------------------------------
+services:
+  apim-subscription-handler:
+    project: automation/functions
+    language: py
+    host: function
+    # The Function App name is an output of event-grid-automation.bicep.
+    # azd resolves this automatically when the infra and service share the
+    # same resource group / deployment.

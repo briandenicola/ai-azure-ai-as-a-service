@@ -1,5 +1,5 @@
-# Azure Managed Grafana with LOB Folder Isolation
-# Provides portal-less access to telemetry for developers
+// Azure Managed Grafana with LOB Folder Isolation
+// Provides portal-less access to telemetry for developers
 
 param location string = resourceGroup().location
 param grafanaName string = 'grafana-ai-gateway'
@@ -30,10 +30,11 @@ resource managedGrafana 'Microsoft.Dashboard/grafana@2023-09-01' = {
   }
 }
 
-// RBAC: Grafana Admin role to IT team
+// RBAC: Grafana Admin role to IT team — only when deployRbac=true and itTeamObjectId is provided
+param deployRbac bool = false
 param itTeamObjectId string
 
-resource itAdminRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource itAdminRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployRbac && !empty(itTeamObjectId)) {
   name: guid(managedGrafana.id, itTeamObjectId, 'Admin')
   scope: managedGrafana
   properties: {
@@ -43,36 +44,11 @@ resource itAdminRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-// RBAC: Grafana managed identity → Monitoring Reader on subscription
-// Allows Grafana to query Application Insights, Log Analytics
-resource grafanaToMonitoring 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(managedGrafana.id, subscription().id, 'MonitoringReader')
-  scope: subscription()
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '43d0d8ad-25c7-4714-9337-8ba259a9fe05') // Monitoring Reader
-    principalId: managedGrafana.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
-// Azure Monitor Data Source
-param applicationInsightsId string
-
-resource dataSource 'Microsoft.Dashboard/grafana/managedPrivateEndpoints@2023-09-01' = {
-  parent: managedGrafana
-  name: 'azure-monitor-datasource'
-  properties: {
-    groupIds: [
-      'azuremonitor'
-    ]
-    privateLinkResourceId: applicationInsightsId
-    privateLinkServiceConnectionState: {
-      actionsRequired: 'None'
-      description: 'Auto-approved'
-      status: 'Approved'
-    }
-  }
-}
+// Grafana connects to Azure Monitor via its system-assigned managed identity using
+// the Monitoring Reader role (assigned at subscription scope in main.bicep).
+// No managed private endpoint needed for the basic dev deployment.
+// For private network access in production: create an AzureMonitorWorkspace or
+// AzureMonitorPrivateLinkScope and target that resource instead.
 
 // Outputs
 output grafanaEndpoint string = managedGrafana.properties.endpoint

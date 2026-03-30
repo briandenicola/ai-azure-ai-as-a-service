@@ -1,0 +1,398 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  JMeter 5.6 Load Test Plan: AI-as-a-Service APIM Gateway
+  =========================================================
+
+  PREREQUISITES (run on jumpbox inside VNet)
+  ===========================================
+  1. Configure APIM hostname resolution (APIM is Internal VNet mode, no public DNS):
+
+       Run as Administrator in PowerShell:
+         $apimIp = az apim show -n APIM_NAME -g RG_NAME \
+                      -query properties.privateIPAddresses[0] -o tsv
+         Add-Content "C:\Windows\System32\drivers\etc\hosts" "$apimIp  APIM_HOSTNAME"
+
+  2. Get subscription keys:
+       $RG  = "rg-contoso-ai-platform-dev"
+       $APIM = "apim-contoso-vdls2xyq"
+       $BRONZE = az apim subscription show -n $APIM -g $RG \
+                    -subscription-id bronze-test -query primaryKey -o tsv
+       $SILVER = az apim subscription show -n $APIM -g $RG \
+                    -subscription-id silver-test -query primaryKey -o tsv
+
+  3. Run headless (UDVs use ${__P(VAR,default)} — pass as -J JMeter properties):
+       jmeter -n -t apim-load-test.jmx -l results.jtl \
+         -JAPIM_HOSTNAME=apim-contoso-vdls2xyq.azure-api.net \
+         -JBRONZE_KEY=$BRONZE -JSILVER_KEY=$SILVER
+
+  4. HTML report:
+       jmeter -g results.jtl -o html-report
+
+  TEST SUITES
+  ===========
+  Suite 1  [Bronze] Chat completions (gpt-4o-mini)               - expect 200
+  Suite 2  [Bronze] Model allowlist block (gpt-4o via Bronze key) - expect 403
+  Suite 3  [Silver] Chat completions (gpt-4o-mini)               - expect 200
+  Suite 4  [Silver] Rate limit stress (300+ RPM, DISABLED)        - expect 200/429
+-->
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan"
+              testname="AI-as-a-Service APIM Load Test" enabled="true">
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+
+      <!-- User-defined variables: Azure Load Testing injects environmentVariables as JMeter -J properties.
+           Reference them with ${__P(VAR,default)}. For local runs: jmeter -JBRONZE_KEY=x -JSILVER_KEY=x
+           Keys never committed to git - stored on the ALT test definition via configure-load-test.ps1 -->
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments"
+                   guiclass="ArgumentsPanel" testclass="Arguments">
+        <collectionProp name="Arguments.arguments">
+          <elementProp name="APIM_HOSTNAME" elementType="Argument">
+            <stringProp name="Argument.name">APIM_HOSTNAME</stringProp>
+            <stringProp name="Argument.value">${__P(APIM_HOSTNAME,apim-contoso-vdls2xyq.azure-api.net)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="API_VERSION" elementType="Argument">
+            <stringProp name="Argument.name">API_VERSION</stringProp>
+            <stringProp name="Argument.value">${__P(API_VERSION,2024-10-21)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <!-- BRONZE_KEY and SILVER_KEY are injected by Azure Load Testing as JMeter -J properties
+               (not OS env vars). The correct runtime pattern is props.get("VAR_NAME").
+               Fallback to System.getenv() enables local headless runs:
+                 $env:BRONZE_KEY="<key>"; $env:SILVER_KEY="<key>"
+                 jmeter -n -t apim-load-test.jmx -l results.jtl
+               Keys are never committed to git — set them on the ALT test definition via
+               configure-load-test.ps1 (reads from APIM at provision time). -->
+          <elementProp name="BRONZE_KEY" elementType="Argument">
+            <stringProp name="Argument.name">BRONZE_KEY</stringProp>
+            <stringProp name="Argument.value">${__P(BRONZE_KEY,)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="SILVER_KEY" elementType="Argument">
+            <stringProp name="Argument.name">SILVER_KEY</stringProp>
+            <stringProp name="Argument.value">${__P(SILVER_KEY,)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+        </collectionProp>
+      </elementProp>
+    </TestPlan>
+    <hashTree>
+
+      <!-- ================================================================= -->
+      <!-- Suite 1: Bronze â€” chat completions with gpt-4o-mini (expect 200)  -->
+      <!-- 5 threads × 10 min sustained (~30 RPM, well under 60 cap) -->
+      <!-- ================================================================= -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup"
+                   testname="[Bronze] Chat Completions – gpt-4o-mini" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">true</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">5</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">10</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">600</stringProp>
+      </ThreadGroup>
+      <hashTree>
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager"
+                       testname="Bronze Auth Headers" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="Ocp-Apim-Subscription-Key" elementType="Header">
+              <stringProp name="Header.name">Ocp-Apim-Subscription-Key</stringProp>
+              <stringProp name="Header.value">${BRONZE_KEY}</stringProp>
+            </elementProp>
+            <elementProp name="Content-Type" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
+                          testname="POST /openai/deployments/gpt-4o-mini/chat/completions"
+                          enabled="true">
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"Reply with exactly one word: Hello"}],"max_tokens":5}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">${APIM_HOSTNAME}</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <stringProp name="HTTPSampler.path">/openai/deployments/gpt-4o-mini/chat/completions?api-version=${API_VERSION}</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion"
+                             testname="Assert 200 OK" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49586">200</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Bronze gpt-4o-mini must return 200</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">8</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+        </hashTree>
+      </hashTree>
+
+      <!-- ================================================================= -->
+      <!-- Suite 2: Bronze â€” model allowlist enforcement (gpt-4o â†’ 403)      -->
+      <!-- Policy checks body "model" field; must be blocked for Bronze tier  -->
+      <!-- ================================================================= -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup"
+                   testname="[Bronze] Model Block â€” gpt-4o must return 403" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <intProp name="LoopController.loops">3</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">2</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">1</stringProp>
+      </ThreadGroup>
+      <hashTree>
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager"
+                       testname="Bronze Auth Headers" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="Ocp-Apim-Subscription-Key" elementType="Header">
+              <stringProp name="Header.name">Ocp-Apim-Subscription-Key</stringProp>
+              <stringProp name="Header.value">${BRONZE_KEY}</stringProp>
+            </elementProp>
+            <elementProp name="Content-Type" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
+                          testname="POST chat/completions (model=gpt-4o in body)" enabled="true">
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <!-- model field in body triggers Bronze allowlist check -->
+                <stringProp name="Argument.value">{"model":"gpt-4o","messages":[{"role":"user","content":"Hello"}],"max_tokens":5}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">${APIM_HOSTNAME}</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <stringProp name="HTTPSampler.path">/openai/deployments/gpt-4o-mini/chat/completions?api-version=${API_VERSION}</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion"
+                             testname="Assert 403 Forbidden" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49586">403</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Bronze must block gpt-4o with 403 ModelNotAllowed</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">8</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+        </hashTree>
+      </hashTree>
+
+      <!-- ================================================================= -->
+      <!-- Suite 3: Silver â€” chat completions (expect 200, higher concurrency)-->
+      <!-- 10 threads × 10 min sustained (~60 RPM steady state)              -->
+      <!-- ================================================================= -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup"
+                   testname="[Silver] Chat Completions – gpt-4o-mini" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">true</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">10</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">10</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">600</stringProp>
+      </ThreadGroup>
+      <hashTree>
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager"
+                       testname="Silver Auth Headers" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="Ocp-Apim-Subscription-Key" elementType="Header">
+              <stringProp name="Header.name">Ocp-Apim-Subscription-Key</stringProp>
+              <stringProp name="Header.value">${SILVER_KEY}</stringProp>
+            </elementProp>
+            <elementProp name="Content-Type" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
+                          testname="POST /openai/deployments/gpt-4o-mini/chat/completions"
+                          enabled="true">
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"Reply with exactly one word: Hello"}],"max_tokens":5}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">${APIM_HOSTNAME}</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <stringProp name="HTTPSampler.path">/openai/deployments/gpt-4o-mini/chat/completions?api-version=${API_VERSION}</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion"
+                             testname="Assert 200 OK" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49586">200</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Silver gpt-4o-mini must return 200</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">8</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+        </hashTree>
+      </hashTree>
+
+      <!-- ================================================================= -->
+      <!-- Suite 4: Silver â€” rate limit stress test (DISABLED by default)     -->
+      <!-- Enable to verify 429s appear once RPM exceeds 300.                 -->
+      <!-- WARNING: Uses real tokens â€” keep max_tokens=1 to minimise cost.    -->
+      <!-- 20 threads Ã— 20 loops / 5 s ramp â‰ˆ 240 req in 5 s = ~2880 RPM    -->
+      <!-- ================================================================= -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup"
+                   testname="[Silver] Rate Limit Stress â€” expect 429 above 300 RPM"
+                   enabled="false">
+        <stringProp name="ThreadGroup.comments">
+          DISABLED â€” enable in JMeter GUI to verify throttling behaviour.
+          Expects a mix of 200 and 429 responses.
+        </stringProp>
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <intProp name="LoopController.loops">20</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">20</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">5</stringProp>
+      </ThreadGroup>
+      <hashTree>
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager"
+                       testname="Silver Auth Headers" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="Ocp-Apim-Subscription-Key" elementType="Header">
+              <stringProp name="Header.name">Ocp-Apim-Subscription-Key</stringProp>
+              <stringProp name="Header.value">${SILVER_KEY}</stringProp>
+            </elementProp>
+            <elementProp name="Content-Type" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
+                          testname="POST chat/completions (rapid fire â€” 1 token)" enabled="true">
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"Hi"}],"max_tokens":1}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">${APIM_HOSTNAME}</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <stringProp name="HTTPSampler.path">/openai/deployments/gpt-4o-mini/chat/completions?api-version=${API_VERSION}</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree/>
+      </hashTree>
+
+      <!-- â•â• Listeners â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+
+      <!-- Summary Report â€” always enabled; results also written to .jtl     -->
+      <ResultCollector guiclass="SummaryReport" testclass="ResultCollector"
+                       testname="Summary Report" enabled="true">
+        <boolProp name="ResultCollector.error_logging">false</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration">
+            <time>true</time>
+            <latency>true</latency>
+            <timestamp>true</timestamp>
+            <success>true</success>
+            <label>true</label>
+            <code>true</code>
+            <message>true</message>
+            <threadName>true</threadName>
+            <bytes>true</bytes>
+            <connectTime>true</connectTime>
+          </value>
+        </objProp>
+        <!-- Results written here; generate HTML report with: jmeter -g results.jtl -o html-report/ -->
+        <stringProp name="filename">C:\apim-tests\results.jtl</stringProp>
+      </ResultCollector>
+      <hashTree/>
+
+      <!-- View Results Tree â€” disabled for headless runs; enable in GUI for debugging -->
+      <ResultCollector guiclass="ViewResultsFullVisualizer" testclass="ResultCollector"
+                       testname="View Results Tree" enabled="false">
+        <boolProp name="ResultCollector.error_logging">false</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration">
+            <time>true</time>
+            <latency>true</latency>
+            <timestamp>true</timestamp>
+            <success>true</success>
+            <label>true</label>
+            <code>true</code>
+            <message>true</message>
+            <responseData>true</responseData>
+          </value>
+        </objProp>
+        <stringProp name="filename"></stringProp>
+      </ResultCollector>
+      <hashTree/>
+
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>

@@ -114,6 +114,147 @@
     {
       "type": 1,
       "content": {
+        "json": "## Traffic Flow: Use Case → APIM → Foundry\n\nAggregate view of how requests move through the architecture — which **APIM subscriptions** are generating traffic, how APIM dispatches them to each **Foundry backend**, and the health of each backend."
+      },
+      "name": "section-traffic-flow"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "// Requests per APIM subscription over time — stacked bar\nAppRequests\n| where TimeGenerated {TimeRange}\n| extend sub = tostring(Properties[\"Subscription Name\"])\n| where isnotempty(sub)\n| summarize Requests = count() by bin(TimeGenerated, 5m), sub\n| sort by TimeGenerated asc",
+        "size": 0,
+        "title": "Requests per subscription over time (5-min buckets)",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+        ],
+        "visualization": "barchart",
+        "chartSettings": {
+          "xAxis": "TimeGenerated",
+          "group": "sub",
+          "createOtherGroup": 0,
+          "showLegend": true,
+          "xSettings": {
+            "label": "Time"
+          },
+          "ySettings": {
+            "label": "Requests",
+            "min": 0
+          }
+        }
+      },
+      "name": "subscription-traffic-chart"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "// Aggregate flow: Subscription → Product → Foundry backend\nlet apim = AppRequests\n| where TimeGenerated {TimeRange}\n| extend corrId = tostring(Properties[\"Request-X-Correlation-Id\"])\n| extend sub    = tostring(Properties[\"Subscription Name\"])\n| extend prod   = tostring(Properties[\"Product Name\"])\n| where isnotempty(corrId)\n| project corrId, OperationId, sub, prod, apimDurationMs = DurationMs, apimSuccess = Success;\nlet foundry = AppDependencies\n| where TimeGenerated {TimeRange}\n| extend corrId = tostring(Properties[\"Request-X-Correlation-Id\"])\n| where isnotempty(corrId)\n| project OperationId, foundryDurationMs = DurationMs, foundryTarget = Target, foundrySuccess = Success;\napim\n| join kind=leftouter foundry on OperationId\n| extend backend = case(\n    foundryTarget contains \"primary\",   \"Primary Foundry (East US)\",\n    foundryTarget contains \"secondary\", \"Secondary Foundry (West US)\",\n    isempty(foundryTarget),             \"(no backend call)\",\n    foundryTarget)\n| summarize\n    Requests         = count(),\n    Errors           = countif(apimSuccess == false),\n    ['Avg APIM (ms)']    = round(avg(apimDurationMs), 0),\n    ['Avg Foundry (ms)'] = round(avg(foundryDurationMs), 0)\n    by sub, prod, backend\n| extend ['Error %'] = round(100.0 * Errors / Requests, 1)\n| sort by Requests desc\n| project\n    ['Subscription'] = sub,\n    ['Product']      = prod,\n    ['→ Foundry']    = backend,\n    Requests,\n    Errors,\n    ['Error %'],\n    ['Avg APIM (ms)'],\n    ['Avg Foundry (ms)']",
+        "size": 1,
+        "title": "Subscription → Product → Foundry routing summary",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "Product",
+              "formatter": 18,
+              "formatOptions": {
+                "thresholdsOptions": "colors",
+                "thresholdsGrid": [
+                  { "operator": "==", "thresholdValue": "ai-bronze",  "representation": "#cd7f32", "text": "{0}" },
+                  { "operator": "==", "thresholdValue": "ai-silver",  "representation": "#c0c0c0", "text": "{0}" },
+                  { "operator": "==", "thresholdValue": "ai-gold",    "representation": "#ffd700", "text": "{0}" },
+                  { "operator": "Default", "thresholdValue": null,   "representation": "normal",  "text": "{0}" }
+                ]
+              }
+            },
+            {
+              "columnMatch": "Errors",
+              "formatter": 8,
+              "formatOptions": { "palette": "red", "min": 0 }
+            },
+            {
+              "columnMatch": "Error %",
+              "formatter": 8,
+              "formatOptions": { "palette": "redGreen", "min": 0, "max": 100 }
+            },
+            {
+              "columnMatch": "Avg APIM (ms)",
+              "formatter": 8,
+              "formatOptions": { "palette": "orange", "min": 0, "max": 5000 }
+            },
+            {
+              "columnMatch": "Avg Foundry (ms)",
+              "formatter": 8,
+              "formatOptions": { "palette": "green", "min": 0, "max": 30000 }
+            }
+          ],
+          "filter": true
+        }
+      },
+      "name": "flow-summary-table"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "// Per-Foundry backend health: latency percentiles + error rate\nAppDependencies\n| where TimeGenerated {TimeRange}\n| where isnotempty(Target)\n| extend backend = case(\n    Target contains \"primary\",   \"Primary Foundry (East US)\",\n    Target contains \"secondary\", \"Secondary Foundry (West US)\",\n    Target)\n| summarize\n    Requests     = count(),\n    Errors       = countif(Success == false),\n    ['Avg (ms)'] = round(avg(DurationMs), 0),\n    ['p50 (ms)'] = round(percentile(DurationMs, 50), 0),\n    ['p95 (ms)'] = round(percentile(DurationMs, 95), 0),\n    ['p99 (ms)'] = round(percentile(DurationMs, 99), 0)\n    by backend\n| extend ['Error %'] = round(100.0 * Errors / Requests, 1)\n| sort by Requests desc\n| project\n    ['Foundry Backend'] = backend,\n    Requests,\n    Errors,\n    ['Error %'],\n    ['Avg (ms)'],\n    ['p50 (ms)'],\n    ['p95 (ms)'],\n    ['p99 (ms)']",
+        "size": 1,
+        "title": "Foundry backend health (latency + error rate)",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "Errors",
+              "formatter": 8,
+              "formatOptions": { "palette": "red", "min": 0 }
+            },
+            {
+              "columnMatch": "Error %",
+              "formatter": 8,
+              "formatOptions": { "palette": "redGreen", "min": 0, "max": 100 }
+            },
+            {
+              "columnMatch": "Avg (ms)",
+              "formatter": 8,
+              "formatOptions": { "palette": "blue", "min": 0, "max": 5000 }
+            },
+            {
+              "columnMatch": "p50 (ms)",
+              "formatter": 8,
+              "formatOptions": { "palette": "blue", "min": 0, "max": 5000 }
+            },
+            {
+              "columnMatch": "p95 (ms)",
+              "formatter": 8,
+              "formatOptions": { "palette": "orange", "min": 0, "max": 15000 }
+            },
+            {
+              "columnMatch": "p99 (ms)",
+              "formatter": 8,
+              "formatOptions": { "palette": "red", "min": 0, "max": 30000 }
+            }
+          ],
+          "filter": false
+        }
+      },
+      "name": "foundry-health-table"
+    },
+    {
+      "type": 1,
+      "content": {
         "json": "## Per-Layer Latency Waterfall\n\nEach bar represents **average time spent in that layer** for requests in the selected time window. APIM overhead = `APIM duration âˆ’ Foundry duration`."
       },
       "name": "section-waterfall"

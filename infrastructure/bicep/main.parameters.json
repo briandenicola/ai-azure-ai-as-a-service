@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "environment": {
+      "value": "${AZURE_ENV_NAME}"
+    },
+    "companyPrefix": {
+      "value": "contoso"
+    },
+    "deployRbac": {
+      "value": "${AZURE_DEPLOY_RBAC}"
+    },
+    "deployJumpbox": {
+      "value": "${AZURE_DEPLOY_JUMPBOX}"
+    },
+    "deployFunctionApp": {
+      "value": "${AZURE_DEPLOY_FUNCTION_APP}"
+    },
+    "deployLoadTest": {
+      "value": "${AZURE_DEPLOY_LOAD_TEST}"
+    },
+    "deployingUserObjectId": {
+      "value": "${AZURE_DEPLOYING_USER_OBJECT_ID}"
+    },
+    "sslCertKeyVaultSecretId": {
+      "value": "${AZURE_SSL_CERT_KV_SECRET_ID}"
+    }
+  }
+}

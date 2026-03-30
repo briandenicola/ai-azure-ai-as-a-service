@@ -1,0 +1,21 @@
+# Certificates and keystores - never commit private keys
+*.p12
+*.pfx
+*.cer
+*.crt
+*.key
+
+# Azure CLI / azd
+.azure/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Node
+node_modules/
+
+# Editor
+.vscode/settings.json

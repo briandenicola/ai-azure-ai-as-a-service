@@ -755,13 +755,16 @@ resource openaiInferenceApiPolicy 'Microsoft.ApiManagement/service/apis/policies
   <outbound>
     <base />
     <set-header name="X-Backend-Region-Used" exists-action="override">
-      <value>@((string)context.Variables["selectedBackend"])</value>
+      <value>@(context.Variables.GetValueOrDefault("selectedBackend", "primary"))</value>
     </set-header>
   </outbound>
   <on-error>
     <base />
+    <!-- GetValueOrDefault prevents KeyNotFoundException when auth fails before
+         inbound sets selectedBackend — without this, missing/invalid subscription
+         keys escalate to 500 instead of returning the correct 401. -->
     <set-header name="X-Backend-Region-Used" exists-action="override">
-      <value>@((string)context.Variables["selectedBackend"])</value>
+      <value>@(context.Variables.GetValueOrDefault("selectedBackend", "unknown"))</value>
     </set-header>
   </on-error>
 </policies>'''
