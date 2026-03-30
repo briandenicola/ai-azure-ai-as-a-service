@@ -49,6 +49,7 @@
             "label": "Correlation ID (optional drilldown)",
             "type": 1,
             "isRequired": false,
+            "isGlobal": true,
             "value": "",
             "typeSettings": {
               "createOnLoad": false
