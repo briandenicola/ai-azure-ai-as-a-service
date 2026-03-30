@@ -288,16 +288,11 @@
             }
           ],
           "rowLimit": 200,
-          "filter": true,
-          "selectionStyle": "highlight",
-          "exportedParameters": [
-            {
-              "fieldName": "Corr ID",
-              "parameterName": "CorrelationId",
-              "parameterType": 1
-            }
-          ]
-        }
+          "filter": true
+        },
+        "exportFieldName": "Corr ID",
+        "exportParameterName": "CorrelationId",
+        "exportDefaultValue": ""
       },
       "name": "trace-table"
     },
@@ -550,16 +545,11 @@
             }
           ],
           "rowLimit": 200,
-          "filter": true,
-          "exportedParameters": [
-            {
-              "fieldName": "Corr ID",
-              "parameterName": "CorrelationId",
-              "parameterType": 1
-            }
-          ],
-          "selectionStyle": "highlight"
-        }
+          "filter": true
+        },
+        "exportFieldName": "Corr ID",
+        "exportParameterName": "CorrelationId",
+        "exportDefaultValue": ""
       },
       "name": "routing-table"
     },
