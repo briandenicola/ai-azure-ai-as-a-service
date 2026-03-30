@@ -288,7 +288,15 @@
             }
           ],
           "rowLimit": 200,
-          "filter": true
+          "filter": true,
+          "selectionStyle": "highlight",
+          "exportedParameters": [
+            {
+              "fieldName": "Corr ID",
+              "parameterName": "CorrelationId",
+              "parameterType": 1
+            }
+          ]
         }
       },
       "name": "trace-table"
@@ -549,7 +557,8 @@
               "parameterName": "CorrelationId",
               "parameterType": 1
             }
-          ]
+          ],
+          "selectionStyle": "highlight"
         }
       },
       "name": "routing-table"
