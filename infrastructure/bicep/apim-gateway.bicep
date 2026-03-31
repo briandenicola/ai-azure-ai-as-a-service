@@ -211,6 +211,9 @@ resource globalPolicy 'Microsoft.ApiManagement/service/policies@2023-05-01-previ
     </set-header>
   </inbound>
   <backend>
+    <!-- Global backend calls primary unconditionally via <forward-request />.
+         API-level backend policies (e.g. openai-inference) run AFTER this and
+         use <choose> to call secondary only when primary returned 429 or 5xx. -->
     <forward-request />
   </backend>
   <outbound>
@@ -726,9 +729,9 @@ resource openaiInferenceApi 'Microsoft.ApiManagement/service/apis@2023-05-01-pre
 //   {{foundry-primary-endpoint}}   provisioned by this Bicep file
 //   {{foundry-secondary-endpoint}} provisioned by this Bicep file
 //
-// Note: this policy's <backend> section does NOT call <base />, so it replaces
-// the product-level <backend> retry.  Product policies still apply their full
-// <inbound> logic (auth, rate-limiting, model allowlist) via <base />.
+// Backend failover: global <forward-request /> calls primary first. This API-level
+// backend section uses <choose> to forward to secondary only when primary returned
+// 429 or 5xx — avoiding a double-call on success that a <retry> body would cause.
 // ==========================================
 resource openaiInferenceApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2023-05-01-preview' = {
   parent: openaiInferenceApi
@@ -742,20 +745,21 @@ resource openaiInferenceApiPolicy 'Microsoft.ApiManagement/service/apis/policies
     <set-backend-service base-url="{{foundry-primary-endpoint}}/openai" />
   </inbound>
   <backend>
-    <!-- Retry once on secondary when primary returns 429 or 5xx.
-         context.Response is null on the FIRST iteration (no prior response yet),
-         so the choose is skipped and forward-request goes to primary.
-         On the RETRY iteration context.Response holds the primary 429/5xx,
-         the choose fires, and we switch to secondary. -->
-    <retry condition="@(context.Response != null &amp;&amp; (context.Response.StatusCode == 429 || context.Response.StatusCode >= 500))" count="1" interval="1" first-fast-retry="true">
-      <choose>
-        <when condition="@(context.Response != null &amp;&amp; (string)context.Variables[&quot;selectedBackend&quot;] == &quot;primary&quot;)">
-          <set-backend-service base-url="{{foundry-secondary-endpoint}}/openai" />
-          <set-variable name="selectedBackend" value="secondary-failover" />
-        </when>
-      </choose>
-      <forward-request timeout="60" />
-    </retry>
+    <!-- APIM policy execution order: global <backend> runs <forward-request />
+         BEFORE this API-level backend section. So context.Response already
+         contains the primary response when this block executes.
+         Use <choose> (not <retry>) to call secondary only when primary failed:
+           - primary 200: choose condition = false → no action → primary response returned
+           - primary 429/5xx: choose condition = true → switch backend → forward-request
+             calls secondary → secondary response returned
+         This avoids double-calling primary that a <retry> body would cause. -->
+    <choose>
+      <when condition="@((context.Response.StatusCode == 429 || context.Response.StatusCode &gt;= 500) &amp;&amp; (string)context.Variables[&quot;selectedBackend&quot;] == &quot;primary&quot;)">
+        <set-backend-service base-url="{{foundry-secondary-endpoint}}/openai" />
+        <set-variable name="selectedBackend" value="secondary-failover" />
+        <forward-request timeout="60" />
+      </when>
+    </choose>
   </backend>
   <outbound>
     <base />

@@ -1,0 +1,40 @@
+﻿<policies>
+	<inbound>
+		<!-- ── Distributed Tracing ─────────────────────────────────────────────────
+         App Gateway (waf-appgw.bicep rewrite rule) injects X-Correlation-Id
+         containing its per-request UUID ({var_request_id}) into every request
+         it forwards here. We capture it in a policy variable so it can be:
+           1. Forwarded to the Foundry backend (see set-header below)
+           2. Echoed back to the client in the outbound section
+           3. Captured in App Insights customDimensions via the diagnostics
+              frontend.request.headers setting (apimAppInsightsDiagnostics)
+         If the request arrives without App Gateway in front (direct VNet call
+         or health probe), fall back to context.RequestId so there is always a
+         correlation anchor in App Insights.
+    ──────────────────────────────────────────────────────────────────────── -->
+		<set-variable name="correlationId" value="@(context.Request.Headers.ContainsKey(&quot;X-Correlation-Id&quot;) ? context.Request.Headers[&quot;X-Correlation-Id&quot;][0] : context.RequestId.ToString())" />
+		<!-- Ensure X-Correlation-Id is present on the request forwarded to Foundry -->
+		<set-header name="X-Correlation-Id" exists-action="override">
+			<value>@((string)context.Variables["correlationId"])</value>
+		</set-header>
+		<!-- Strip client-supplied key — APIM owns the Foundry credential via managed identity -->
+		<set-header name="api-key" exists-action="delete" />
+		<!-- Acquire Entra token for Azure Cognitive Services using APIM system-assigned MSI -->
+		<authentication-managed-identity resource="https://cognitiveservices.azure.com" output-token-variable-name="msi-access-token" ignore-error="false" />
+		<!-- Inject Bearer token for all backend calls -->
+		<set-header name="Authorization" exists-action="override">
+			<value>@("Bearer " + (string)context.Variables["msi-access-token"])</value>
+		</set-header>
+	</inbound>
+	<backend>
+		<base />
+	</backend>
+	<outbound>
+		<!-- Echo the correlation ID back to the caller so client logs can be joined
+         to the App Insights traces without round-tripping to the portal. -->
+		<set-header name="X-Correlation-Id" exists-action="override">
+			<value>@((string)context.Variables["correlationId"])</value>
+		</set-header>
+	</outbound>
+	<on-error />
+</policies>

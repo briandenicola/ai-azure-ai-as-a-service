@@ -1,0 +1,33 @@
+﻿<policies>
+  <inbound>
+    <base />
+    <set-variable name="selectedBackend" value="primary" />
+    <set-backend-service base-url="{{foundry-primary-endpoint}}/openai" />
+  </inbound>
+  <backend>
+    <!-- APIM executes global <backend><forward-request /></backend> BEFORE this
+         API-level backend section. So context.Response already has the primary
+         response when this runs. Strategy: use <choose> to only call secondary
+         when primary returned a retriable error. On success (200), do nothing
+         and let the existing response flow through. -->
+    <choose>
+      <when condition="@((context.Response.StatusCode == 429 || context.Response.StatusCode >= 500) &amp;&amp; (string)context.Variables[&quot;selectedBackend&quot;] == &quot;primary&quot;)">
+        <set-backend-service base-url="{{foundry-secondary-endpoint}}/openai" />
+        <set-variable name="selectedBackend" value="secondary-failover" />
+        <forward-request timeout="60" />
+      </when>
+    </choose>
+  </backend>
+  <outbound>
+    <base />
+    <set-header name="X-Backend-Region-Used" exists-action="override">
+      <value>@(context.Variables.GetValueOrDefault("selectedBackend", "primary"))</value>
+    </set-header>
+  </outbound>
+  <on-error>
+    <base />
+    <set-header name="X-Backend-Region-Used" exists-action="override">
+      <value>@(context.Variables.GetValueOrDefault("selectedBackend", "unknown"))</value>
+    </set-header>
+  </on-error>
+</policies>
