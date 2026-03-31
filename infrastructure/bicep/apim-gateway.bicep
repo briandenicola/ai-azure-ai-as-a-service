@@ -742,9 +742,14 @@ resource openaiInferenceApiPolicy 'Microsoft.ApiManagement/service/apis/policies
     <set-backend-service base-url="{{foundry-primary-endpoint}}/openai" />
   </inbound>
   <backend>
+    <!-- Retry once on secondary when primary returns 429 or 5xx.
+         context.Response is null on the FIRST iteration (no prior response yet),
+         so the choose is skipped and forward-request goes to primary.
+         On the RETRY iteration context.Response holds the primary 429/5xx,
+         the choose fires, and we switch to secondary. -->
     <retry condition="@(context.Response != null &amp;&amp; (context.Response.StatusCode == 429 || context.Response.StatusCode >= 500))" count="1" interval="1" first-fast-retry="true">
       <choose>
-        <when condition="@((string)context.Variables[&quot;selectedBackend&quot;] == &quot;primary&quot;)">
+        <when condition="@(context.Response != null &amp;&amp; (string)context.Variables[&quot;selectedBackend&quot;] == &quot;primary&quot;)">
           <set-backend-service base-url="{{foundry-secondary-endpoint}}/openai" />
           <set-variable name="selectedBackend" value="secondary-failover" />
         </when>
