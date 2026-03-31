@@ -65,7 +65,7 @@
     {
       "type": 1,
       "content": {
-        "json": "# AppGW ? APIM ? Azure AI Foundry — End-to-End Trace\n\nDistributed trace waterfall stitched across three layers via **X-Correlation-Id**:\n\n| Layer | Data Source | Metric |\n|---|---|---|\n| **App Gateway WAF** | `AGWAccessLogs` (Log Analytics) | Total connection time from client |\n| **APIM Gateway** | `AppRequests` (App Insights) | APIM processing + backend call |\n| **Azure AI Foundry** | `AppDependencies` (App Insights) | Foundry model inference time |\n\n**How correlation works:** The App Gateway rewrite rule stamps `X-Correlation-Id: client_ip-client_port` on every forwarded request (Azure App Gateway does not expose a per-request UUID; the TCP source port is unique per active connection, so this pair is unique within any live request window). APIM captures it as `Properties[\"Request-X-Correlation-Id\"]` in App Insights and forwards it to Foundry. The APIM ? Foundry join uses the header value directly. The AppGW row is matched approximately using the client IP from the corrId and the APIM request time binned to 2 seconds.\n\n> Use the **Correlation ID** parameter above to drill into a single request trace."
+        "json": "# AppGW ? APIM ? Azure AI Foundry ï¿½ End-to-End Trace\n\nDistributed trace waterfall stitched across three layers via **X-Correlation-Id**:\n\n| Layer | Data Source | Metric |\n|---|---|---|\n| **App Gateway WAF** | `AGWAccessLogs` (Log Analytics) | Total connection time from client |\n| **APIM Gateway** | `AppRequests` (App Insights) | APIM processing + backend call |\n| **Azure AI Foundry** | `AppDependencies` (App Insights) | Foundry model inference time |\n\n**How correlation works:** The App Gateway rewrite rule stamps `X-Correlation-Id: client_ip-client_port` on every forwarded request (Azure App Gateway does not expose a per-request UUID; the TCP source port is unique per active connection, so this pair is unique within any live request window). APIM captures it as `Properties[\"Request-X-Correlation-Id\"]` in App Insights and forwards it to Foundry. The APIM ? Foundry join uses the header value directly. The AppGW row is matched approximately using the client IP from the corrId and the APIM request time binned to 2 seconds.\n\n> Use the **Correlation ID** parameter above to drill into a single request trace."
       },
       "name": "header"
     },
@@ -114,7 +114,7 @@
     {
       "type": 1,
       "content": {
-        "json": "## Traffic Flow: Use Case ? APIM ? Foundry\n\nAggregate view of how requests move through the architecture — which **APIM subscriptions** are generating traffic, how APIM dispatches them to each **Foundry backend**, and the health of each backend."
+        "json": "## Traffic Flow: Use Case ? APIM ? Foundry\n\nAggregate view of how requests move through the architecture ï¿½ which **APIM subscriptions** are generating traffic, how APIM dispatches them to each **Foundry backend**, and the health of each backend."
       },
       "name": "section-traffic-flow"
     },
@@ -122,7 +122,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "// Requests per APIM subscription over time — stacked bar\nAppRequests\n| where TimeGenerated {TimeRange}\n| extend sub = tostring(Properties[\"Subscription Name\"])\n| where isnotempty(sub)\n| summarize Requests = count() by bin(TimeGenerated, 5m), sub\n| sort by TimeGenerated asc",
+        "query": "// Requests per APIM subscription over time ï¿½ stacked bar\nAppRequests\n| where TimeGenerated {TimeRange}\n| extend sub = tostring(Properties[\"Subscription Name\"])\n| where isnotempty(sub)\n| summarize Requests = count() by bin(TimeGenerated, 5m), sub\n| sort by TimeGenerated asc",
         "size": 0,
         "title": "Requests per subscription over time (5-min buckets)",
         "queryType": 0,
@@ -151,7 +151,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "// Aggregate flow: Subscription ? Product ? Foundry backend\nlet apim = AppRequests\n| where TimeGenerated {TimeRange}\n| extend corrId = tostring(Properties[\"Request-X-Correlation-Id\"])\n| extend sub    = tostring(Properties[\"Subscription Name\"])\n| extend prod   = tostring(Properties[\"Product Name\"])\n| where isnotempty(corrId)\n| project corrId, OperationId, sub, prod, apimDurationMs = DurationMs, apimSuccess = Success;\nlet foundry = AppDependencies\n| where TimeGenerated {TimeRange}\n| extend corrId = tostring(Properties[\"Request-X-Correlation-Id\"])\n| where isnotempty(corrId)\n| project OperationId, foundryDurationMs = DurationMs, foundryTarget = Target, foundrySuccess = Success;\napim\n| join kind=leftouter foundry on OperationId\n| extend backend = case(\n    foundryTarget contains \"primary\",   \"Primary Foundry (East US)\",\n    foundryTarget contains \"secondary\", \"Secondary Foundry (West US)\",\n    isempty(foundryTarget),             \"(no backend call)\",\n    foundryTarget)\n| summarize\n    Requests         = count(),\n    Errors           = countif(apimSuccess == false),\n    ['Avg APIM (ms)']    = round(avg(apimDurationMs), 0),\n    ['Avg Foundry (ms)'] = round(avg(foundryDurationMs), 0)\n    by sub, prod, backend\n| extend ['Error %'] = round(100.0 * Errors / Requests, 1)\n| sort by Requests desc\n| project\n    ['Subscription'] = sub,\n    ['Product']      = prod,\n    ['? Foundry']    = backend,\n    Requests,\n    Errors,\n    ['Error %'],\n    ['Avg APIM (ms)'],\n    ['Avg Foundry (ms)']",
+        "query": "// Aggregate flow: Subscription -> Product -> Foundry backend\n// Backend derived from Response-X-Backend-Region-Used logged by APIM outbound policy.\n// More reliable than AppDependencies: APIM retry swallows the primary 429 so the\n// primary backend call never appears as a dependency row.\nAppRequests\n| where TimeGenerated {TimeRange}\n| extend sub       = tostring(Properties[\"Subscription Name\"])\n| extend prod      = tostring(Properties[\"Product Name\"])\n| extend backendRaw = tostring(Properties[\"Response-X-Backend-Region-Used\"])\n| extend backend = case(\n    backendRaw == \"primary\",            \"Primary Foundry (East US)\",\n    backendRaw == \"secondary-failover\", \"Secondary Foundry (West US)\",\n    isempty(backendRaw),                \"(no backend call)\",\n    backendRaw)\n| summarize\n    Requests          = count(),\n    Errors            = countif(Success == false),\n    ['Avg APIM (ms)'] = round(avg(DurationMs), 0)\n    by sub, prod, backend\n| extend ['Error %'] = round(100.0 * Errors / Requests, 1)\n| sort by Requests desc\n| project\n    ['Subscription'] = sub,\n    ['Product']      = prod,\n    ['? Foundry']    = backend,\n    Requests,\n    Errors,\n    ['Error %'],\n    ['Avg APIM (ms)']",
         "size": 1,
         "title": "Subscription ? Product ? Foundry routing summary",
         "queryType": 0,
@@ -205,7 +205,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "// Per-Foundry backend health: latency percentiles + error rate\nAppDependencies\n| where TimeGenerated {TimeRange}\n| where isnotempty(Target)\n| extend backend = case(\n    Target contains \"primary\",   \"Primary Foundry (East US)\",\n    Target contains \"secondary\", \"Secondary Foundry (West US)\",\n    Target)\n| summarize\n    Requests     = count(),\n    Errors       = countif(Success == false),\n    ['Avg (ms)'] = round(avg(DurationMs), 0),\n    ['p50 (ms)'] = round(percentile(DurationMs, 50), 0),\n    ['p95 (ms)'] = round(percentile(DurationMs, 95), 0),\n    ['p99 (ms)'] = round(percentile(DurationMs, 99), 0)\n    by backend\n| extend ['Error %'] = round(100.0 * Errors / Requests, 1)\n| sort by Requests desc\n| project\n    ['Foundry Backend'] = backend,\n    Requests,\n    Errors,\n    ['Error %'],\n    ['Avg (ms)'],\n    ['p50 (ms)'],\n    ['p95 (ms)'],\n    ['p99 (ms)']",
+        "query": "// Per-Foundry backend health: latency percentiles + error rate\n// Uses Response-X-Backend-Region-Used from AppRequests so both primary and\n// secondary-failover rows are visible (AppDependencies only captures final call).\nAppRequests\n| where TimeGenerated {TimeRange}\n| extend backendRaw = tostring(Properties[\"Response-X-Backend-Region-Used\"])\n| where isnotempty(backendRaw)\n| extend backend = case(\n    backendRaw == \"primary\",            \"Primary Foundry (East US)\",\n    backendRaw == \"secondary-failover\", \"Secondary Foundry (West US)\",\n    backendRaw)\n| summarize\n    Requests     = count(),\n    Errors       = countif(Success == false),\n    ['Avg (ms)'] = round(avg(DurationMs), 0),\n    ['p50 (ms)'] = round(percentile(DurationMs, 50), 0),\n    ['p95 (ms)'] = round(percentile(DurationMs, 95), 0),\n    ['p99 (ms)'] = round(percentile(DurationMs, 99), 0)\n    by backend\n| extend ['Error %'] = round(100.0 * Errors / Requests, 1)\n| sort by Requests desc\n| project\n    ['Foundry Backend'] = backend,\n    Requests,\n    Errors,\n    ['Error %'],\n    ['Avg (ms)'],\n    ['p50 (ms)'],\n    ['p95 (ms)'],\n    ['p99 (ms)']",
         "size": 1,
         "title": "Foundry backend health (latency + error rate)",
         "queryType": 0,
@@ -719,7 +719,7 @@
     {
       "type": 1,
       "content": {
-        "json": "## Per-Request Waterfall\n\nClick any row in the routing table above to populate the **Correlation ID** parameter, then this panel renders a **3-layer horizontal bar chart** for that specific connection — proportional to time spent in each layer:\n\n- ?? **App Gateway** — WAF inspection + TLS termination + routing overhead\n- ?? **APIM** — policy execution (auth, quota, caching, logging) overhead after Foundry call returns\n- ?? **Foundry** — model inference time at the AI backend\n\n> *The bars are stacked left-to-right in call order. Each request in the selected window is one row.*"
+        "json": "## Per-Request Waterfall\n\nClick any row in the routing table above to populate the **Correlation ID** parameter, then this panel renders a **3-layer horizontal bar chart** for that specific connection ï¿½ proportional to time spent in each layer:\n\n- ?? **App Gateway** ï¿½ WAF inspection + TLS termination + routing overhead\n- ?? **APIM** ï¿½ policy execution (auth, quota, caching, logging) overhead after Foundry call returns\n- ?? **Foundry** ï¿½ model inference time at the AI backend\n\n> *The bars are stacked left-to-right in call order. Each request in the selected window is one row.*"
       },
       "name": "section-drilldown"
     },
@@ -729,7 +729,7 @@
         "version": "KqlItem/1.0",
         "query": "// Per-request waterfall: 3-layer horizontal bars\n// Each row = one request. Columns = time in each layer, stacked.\nlet filter_corrId = \"{CorrelationId}\";\nlet apim = AppRequests\n| where TimeGenerated {TimeRange}\n| extend corrId       = tostring(Properties[\"Request-X-Correlation-Id\"])\n| extend apimProduct  = tostring(Properties[\"Product Name\"])\n| where isnotempty(corrId)\n| where filter_corrId == \"\" or corrId == filter_corrId\n| project apimTime=TimeGenerated, corrId, OperationId,\n          apimDurationMs=DurationMs, apimStatus=ResultCode, apimProduct;\nlet foundry = AppDependencies\n| where TimeGenerated {TimeRange}\n| extend corrId = tostring(Properties[\"Request-X-Correlation-Id\"])\n| where isnotempty(corrId)\n| where filter_corrId == \"\" or corrId == filter_corrId\n| project OperationId, foundryDurationMs=DurationMs,\n          foundryTarget=Target;\nlet agw = AGWAccessLogs\n| where TimeGenerated {TimeRange}\n| extend corrId = strcat(ClientIp, \"-\", tostring(ClientPort))\n| where filter_corrId == \"\" or corrId == filter_corrId\n| project corrId, agwTotalMs = toreal(TimeTaken) * 1000;\napim\n| join kind=leftouter (foundry) on OperationId\n| join kind=leftouter (agw) on corrId\n| extend foundryMs      = iff(isnotempty(foundryDurationMs), foundryDurationMs, 0.0)\n| extend agwTotal       = iff(isnotempty(agwTotalMs), agwTotalMs, apimDurationMs)\n| extend apimOverheadMs = max_of(apimDurationMs - foundryMs, 0.0)\n| extend agwOverheadMs  = max_of(agwTotal - apimDurationMs, 0.0)\n| extend foundryHost    = tostring(split(foundryTarget, \"/\")[2])\n| extend backend        = case(\n    foundryHost contains \"primary\",   \"? Primary\",\n    foundryHost contains \"secondary\", \"? Secondary\",\n    \"? Foundry\")\n| extend rowLabel = strcat(\n    format_datetime(apimTime, \"HH:mm:ss\"),\n    \" \", apimProduct,\n    \" \", backend,\n    \" [\", tostring(round(agwTotal,0)), \"ms]\")\n| project\n    rowLabel,\n    ['App Gateway (ms)'] = round(agwOverheadMs, 1),\n    ['APIM overhead (ms)'] = round(apimOverheadMs, 1),\n    ['Foundry inference (ms)'] = round(foundryMs, 1)\n| sort by rowLabel asc\n| limit 50",
         "size": 3,
-        "title": "Per-request latency waterfall — click a row above to filter by Correlation ID",
+        "title": "Per-request latency waterfall ï¿½ click a row above to filter by Correlation ID",
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
         "crossComponentResources": [
@@ -740,7 +740,7 @@
           "xAxis": "rowLabel",
           "showLegend": true,
           "xSettings": {
-            "label": "Request (time · product · backend · total ms)"
+            "label": "Request (time ï¿½ product ï¿½ backend ï¿½ total ms)"
           },
           "ySettings": {
             "label": "Milliseconds",
@@ -772,7 +772,7 @@
     {
       "type": 1,
       "content": {
-        "json": "---\n\n**Tip:** The **Correlation ID** parameter box at the top also accepts manual input — paste a value from the trace table `Corr ID` column to isolate a specific client connection across all panels above."
+        "json": "---\n\n**Tip:** The **Correlation ID** parameter box at the top also accepts manual input ï¿½ paste a value from the trace table `Corr ID` column to isolate a specific client connection across all panels above."
       },
       "name": "footer"
     }
