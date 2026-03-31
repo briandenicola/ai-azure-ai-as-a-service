@@ -327,13 +327,13 @@ resource apimAppInsightsDiagnostics 'Microsoft.ApiManagement/service/diagnostics
 
 // ─── Product: Bronze ────────────────────────────────────────────────────────
 // Self-service, no approval. Inference only (gpt-4o-mini, Phi-4).
-// 10 K TPM · 60 RPM · failover enabled.
+// 500 TPM · 60 RPM · failover enabled.
 resource bronzeProduct 'Microsoft.ApiManagement/service/products@2023-05-01-preview' = {
   parent: apim
   name: 'ai-bronze'
   properties: {
     displayName: 'AI Bronze'
-    description: 'Entry-tier AI access. Models: gpt-4o-mini, Phi-4. 10K TPM, 60 RPM. Multi-region failover included.'
+    description: 'Entry-tier AI access. Models: gpt-4o-mini, Phi-4. 500 TPM, 60 RPM. Multi-region failover included.'
     subscriptionRequired: true
     approvalRequired: false
     state: 'published'
@@ -386,8 +386,8 @@ resource bronzeProductPolicy 'Microsoft.ApiManagement/service/products/policies@
         </return-response>
       </when>
     </choose>
-    <!-- TPM cap: 10 K tokens/min -->
-    <azure-openai-token-limit tokens-per-minute="10000"
+    <!-- TPM cap: 500 tokens/min -->
+    <azure-openai-token-limit tokens-per-minute="500"
       counter-key="@(context.Subscription.Id)"
       estimate-prompt-tokens="true"
       remaining-tokens-header-name="X-Token-Remaining" />
@@ -414,7 +414,7 @@ resource silverProduct 'Microsoft.ApiManagement/service/products@2023-05-01-prev
   name: 'ai-silver'
   properties: {
     displayName: 'AI Silver'
-    description: 'Mid-tier AI access. Models: gpt-4o, gpt-4o-mini, Phi-4, Llama-3-70b + Agents API. 50K TPM, 300 RPM. Multi-region failover included.'
+    description: 'Mid-tier AI access. Models: gpt-4o, gpt-4o-mini, Phi-4, Llama-3-70b + Agents API. 1K TPM, 300 RPM. Multi-region failover included.'
     subscriptionRequired: true
     approvalRequired: false
     state: 'published'
@@ -466,8 +466,8 @@ resource silverProductPolicy 'Microsoft.ApiManagement/service/products/policies@
         </return-response>
       </when>
     </choose>
-    <!-- TPM cap: 50 K tokens/min -->
-    <azure-openai-token-limit tokens-per-minute="50000"
+    <!-- TPM cap: 1 K tokens/min -->
+    <azure-openai-token-limit tokens-per-minute="1000"
       counter-key="@(context.Subscription.Id)"
       estimate-prompt-tokens="true"
       remaining-tokens-header-name="X-Token-Remaining" />

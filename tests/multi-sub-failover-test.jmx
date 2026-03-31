@@ -11,18 +11,19 @@
 
   Traffic path:
     JMeter → AppGW WAF v2 (HTTPS 443) → APIM openai-inference API →
-      primary Foundry (1K TPM cap) → 429 → APIM retries → secondary Foundry
+      primary Foundry (1K TPM cap) → 429 → APIM choose → secondary Foundry
       X-Backend-Region-Used: secondary-failover
 
   TEST SUITES (all run in parallel)
   ==================================
-  Suite 1  [Bronze] Sustained  — 3 threads, 8s think, 120s, max_tokens=5
+  Suite 1  [Bronze] Sustained  — 3 threads, 8s think, 120s, max_tokens=5   (~285 TPM, well under 500 Bronze cap)
   Suite 2  [Bronze] Blast      — 8 threads, 3s think, 100s, max_tokens=1 (disabled)
-  Suite 3  [Silver] Sustained  — 3 threads, 8s think, 120s, max_tokens=5
-  Suite 4  [Silver] Blast      — 8 threads, 1s think, 100s, max_tokens=20
+  Suite 3  [Silver] Sustained  — 3 threads, 8s think, 120s, max_tokens=5   (~285 TPM, well under 1K Silver cap)
+  Suite 4  [Silver] Blast      — 3 threads, 4s think, 100s, max_tokens=20  (~981 TPM, ~= 1K Silver cap)
 
-  Silver blast: ~180 RPM × (20 response + ~10 prompt) ≈ 5400 TPM >> 1K primary cap.
-  Primary saturates in ~10s → Foundry 429s → APIM backend retry fires for both subs.
+  Silver blast: ~33 RPM × (20 response + ~10 prompt) ≈ 981 TPM ≈ Foundry 1K primary cap.
+  Bronze sustained adds ~285 TPM → combined ~1266 TPM > 1K Foundry → Foundry 429s → APIM failover.
+  Primary saturates within ~30s of ramp-up, then BOTH subscribers see secondary-failover.
 
   ASSERTIONS
   ==========
@@ -526,7 +527,7 @@ if (region.contains("secondary")) {
           <boolProp name="LoopController.continue_forever">true</boolProp>
           <intProp name="LoopController.loops">-1</intProp>
         </elementProp>
-        <stringProp name="ThreadGroup.num_threads">8</stringProp>
+        <stringProp name="ThreadGroup.num_threads">3</stringProp>
         <stringProp name="ThreadGroup.ramp_time">5</stringProp>
         <boolProp name="ThreadGroup.scheduler">true</boolProp>
         <stringProp name="ThreadGroup.duration">100</stringProp>
@@ -556,12 +557,13 @@ if (region.contains("secondary")) {
         </HeaderManager>
         <hashTree/>
 
-        <!-- 1s think time + max_tokens=20:
-             ~180 RPM × (20 response + ~10 prompt) = ~5400 TPM >> 1K primary cap.
-             Under Silver's 300 RPM APIM limit. Primary saturates within ~10s. -->
+        <!-- 4s think time + max_tokens=20 + 3 threads:
+             ~33 RPM × (20 response + ~10 prompt) = ~981 TPM ≈ Silver APIM cap (1K).
+             Bronze sustained adds ~285 TPM → combined ~1266 TPM > Foundry 1K primary.
+             Foundry 429s trigger APIM <choose> failover to secondary for BOTH subscribers. -->
         <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer"
-                       testname="Think Time 1s — saturate 1K TPM primary cap" enabled="true">
-          <stringProp name="ConstantTimer.delay">1000</stringProp>
+                       testname="Think Time 4s — ~981 TPM (just under 1K Silver cap)" enabled="true">
+          <stringProp name="ConstantTimer.delay">4000</stringProp>
         </ConstantTimer>
         <hashTree/>
 
