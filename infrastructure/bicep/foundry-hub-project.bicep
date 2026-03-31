@@ -59,22 +59,23 @@ resource foundry1 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
   }
 }
 
-// gpt-4o-mini on primary — cheapest OpenAI chat model
-// capacity=2 (2K TPM, 20 RPM) intentionally low: saturates under the failover
-// blast test (20 threads × 5 s think ≈ 208 req/min >> 20 RPM) so APIM retries
-// to secondary.  Increase to 10+ for non-demo workloads.
+// gpt-4o (deployed as 'gpt-4o-mini' to keep APIM URLs unchanged) on primary
+// gpt-4o-mini 2024-07-18 was deprecated 2026-03-31; gpt-4o 2024-11-20 is the
+// current GA replacement.  Deployment name kept as 'gpt-4o-mini' so the APIM
+// policy URL (/openai/deployments/gpt-4o-mini/chat/completions) is unchanged.
+// capacity=2 intentionally low: saturates under the failover blast test.
 resource gpt4oMini1 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
   parent: foundry1
   name: 'gpt-4o-mini'
   sku: {
     name: 'Standard'
-    capacity: 2  // 2K TPM, 20 RPM — intentionally low for failover demo
+    capacity: 2  // 2K TPM — intentionally low for failover demo
   }
   properties: {
     model: {
       format: 'OpenAI'
-      name: 'gpt-4o-mini'
-      version: '2024-07-18'
+      name: 'gpt-4o'
+      version: '2024-11-20'
     }
     versionUpgradeOption: 'OnceCurrentVersionExpired'
   }
@@ -121,21 +122,19 @@ resource foundry2 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
 }
 
 // Same model set on secondary for failover consistency
-// capacity=30 (30K TPM, 300 RPM) — must absorb 100% of primary overflow
-// during failover test: primary is capped at 10 RPM so secondary receives
-// up to ~210 req/min; 300 RPM gives comfortable headroom.
+// capacity=30 — must absorb 100% of primary overflow during failover test.
 resource gpt4oMini2 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
   parent: foundry2
   name: 'gpt-4o-mini'
   sku: {
     name: 'Standard'
-    capacity: 30  // 30K TPM, 300 RPM — handles full failover overflow from primary
+    capacity: 30  // 30K TPM — handles full failover overflow from primary
   }
   properties: {
     model: {
       format: 'OpenAI'
-      name: 'gpt-4o-mini'
-      version: '2024-07-18'
+      name: 'gpt-4o'
+      version: '2024-11-20'
     }
     versionUpgradeOption: 'OnceCurrentVersionExpired'
   }
