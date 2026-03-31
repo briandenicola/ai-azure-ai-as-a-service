@@ -294,7 +294,7 @@ resource apimAppInsightsDiagnostics 'Microsoft.ApiManagement/service/diagnostics
         body: { bytes: 0 }
       }
       response: {
-        headers: []
+        headers: [ 'X-Backend-Region-Used', 'X-Correlation-Id' ]   // populates AppDependencies with backend region
         body: { bytes: 0 }
       }
     }
