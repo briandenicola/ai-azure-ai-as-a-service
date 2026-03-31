@@ -63,15 +63,15 @@ resource foundry1 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
 // gpt-4o-mini 2024-07-18 was deprecated 2026-03-31; gpt-4o 2024-11-20 is the
 // current GA replacement.  Deployment name kept as 'gpt-4o-mini' so the APIM
 // policy URL (/openai/deployments/gpt-4o-mini/chat/completions) is unchanged.
-// capacity=1 intentionally low: Silver blast (~5400 TPM) saturates the 1K cap
-// within ~10s, triggering Foundry 429s → APIM retries on secondary for both subs.
-// Raise to 10+ for non-demo workloads.
+// capacity=2 (2K TPM, 12 RPM): saturates almost immediately under any blast load,
+// ensuring primary→secondary failover is visible in the workbook within seconds.
+// capacity=1 was never serving requests (gpt-4o Standard requires ≥2 for RPM gating).
 resource gpt4oMini1 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
   parent: foundry1
   name: 'gpt-4o-mini'
   sku: {
     name: 'Standard'
-    capacity: 1  // 1K TPM — intentionally low; Silver blast saturates in ~10s
+    capacity: 2  // 2K TPM, 12 RPM — saturates quickly to demonstrate failover
   }
   properties: {
     model: {
