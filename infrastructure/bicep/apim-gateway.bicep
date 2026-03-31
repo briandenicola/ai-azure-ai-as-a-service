@@ -396,15 +396,9 @@ resource bronzeProductPolicy 'Microsoft.ApiManagement/service/products/policies@
       counter-key="@(&quot;bronze-rpm-&quot; + context.Subscription.Id)" />
   </inbound>
   <backend>
-    <retry condition="@(context.Response.StatusCode == 429 || context.Response.StatusCode >= 500)" count="1" interval="2" first-fast-retry="true">
-      <!-- Only switch to secondary on a RETRY (context.Response is null on first attempt) -->
-      <choose>
-        <when condition="@(context.Response != null &amp;&amp; (context.Response.StatusCode == 429 || context.Response.StatusCode >= 500))">
-          <set-backend-service base-url="@((string)context.Variables[&quot;secondaryBackend&quot;] + (string)context.Variables[&quot;apiPathSuffix&quot;])" />
-        </when>
-      </choose>
-      <forward-request timeout="120" />
-    </retry>
+    <!-- Failover is handled by the openai-inference API-level <choose> policy.
+         Product scope delegates entirely — no retry or forward-request here. -->
+    <base />
   </backend>
   <outbound><base /></outbound>
   <on-error><base /></on-error>
@@ -482,15 +476,9 @@ resource silverProductPolicy 'Microsoft.ApiManagement/service/products/policies@
       counter-key="@(&quot;silver-rpm-&quot; + context.Subscription.Id)" />
   </inbound>
   <backend>
-    <retry condition="@(context.Response.StatusCode == 429 || context.Response.StatusCode >= 500)" count="1" interval="2" first-fast-retry="true">
-      <!-- Only switch to secondary on a RETRY (context.Response is null on first attempt) -->
-      <choose>
-        <when condition="@(context.Response != null &amp;&amp; (context.Response.StatusCode == 429 || context.Response.StatusCode >= 500))">
-          <set-backend-service base-url="@((string)context.Variables[&quot;secondaryBackend&quot;] + (string)context.Variables[&quot;apiPathSuffix&quot;])" />
-        </when>
-      </choose>
-      <forward-request timeout="120" />
-    </retry>
+    <!-- Failover is handled by the openai-inference API-level <choose> policy.
+         Product scope delegates entirely — no retry or forward-request here. -->
+    <base />
   </backend>
   <outbound><base /></outbound>
   <on-error><base /></on-error>
@@ -555,15 +543,9 @@ resource goldProductPolicy 'Microsoft.ApiManagement/service/products/policies@20
     <!-- No RPM cap for Gold -->
   </inbound>
   <backend>
-    <retry condition="@(context.Response.StatusCode == 429 || context.Response.StatusCode >= 500)" count="1" interval="2" first-fast-retry="true">
-      <!-- Only switch to secondary on a RETRY (context.Response is null on first attempt) -->
-      <choose>
-        <when condition="@(context.Response != null &amp;&amp; (context.Response.StatusCode == 429 || context.Response.StatusCode >= 500))">
-          <set-backend-service base-url="@((string)context.Variables[&quot;secondaryBackend&quot;] + (string)context.Variables[&quot;apiPathSuffix&quot;])" />
-        </when>
-      </choose>
-      <forward-request timeout="120" />
-    </retry>
+    <!-- Failover is handled by the openai-inference API-level <choose> policy.
+         Product scope delegates entirely — no retry or forward-request here. -->
+    <base />
   </backend>
   <outbound><base /></outbound>
   <on-error><base /></on-error>
