@@ -345,7 +345,8 @@ if (region.contains("secondary")) {
         </HeaderManager>
         <hashTree/>
 
-        <!-- 3s think time: 8 threads → ~2.7 RPS → ~2700 TPM at max_tokens=1+prompt -->
+        <!-- 3s think time, max_tokens=200 + ~10 input ≈ 210 tokens/req
+             3 threads × (1/(3+~2)s) = 36 RPM × 210 = ~756 TPM from BA blast alone -->
         <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer"
                        testname="Think Time 3s — blast pace" enabled="true">
           <stringProp name="ConstantTimer.delay">3000</stringProp>
@@ -567,14 +568,13 @@ if (region.contains("secondary")) {
         </HeaderManager>
         <hashTree/>
 
-        <!-- 4s think time + max_tokens=20 + 3 threads:
-             ~33 RPM × (20 response + ~10 prompt) = ~981 TPM per Silver sub.
-             AML Screening APIM cap: 1K TPM/sub — blast stays just under it, passes to Foundry.
-             Branch Advisor adds ~285 TPM; with Credit Underwriting Suite 6 also running,
-             combined ~2247 TPM → approaches Foundry 5K primary → APIM <choose> failover.
-             Primary saturates → secondary-failover rows appear in App Insights. -->
+        <!-- 4s think time + max_tokens=200 + ~10 input ≈ 210 tokens/req.
+             3 threads × (1/(4+~2)s) = 30 RPM × 210 = ~630 TPM per Silver sub.
+             AML cap raised to 5K/sub so APIM doesn't throttle; Foundry 1K cap is the bottleneck.
+             Combined: AML blast ~630 + CU blast ~630 + BA sustained ~150 ≈ 1410 TPM → Foundry 429s
+             → APIM <choose> failover → secondary-failover in App Insights. -->
         <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer"
-                       testname="Think Time 4s — ~981 TPM per Silver sub towards Foundry 5K cap" enabled="true">
+                       testname="Think Time 4s — high-token blast towards Foundry 1K cap" enabled="true">
           <stringProp name="ConstantTimer.delay">4000</stringProp>
         </ConstantTimer>
         <hashTree/>
@@ -587,7 +587,7 @@ if (region.contains("secondary")) {
             <collectionProp name="Arguments.arguments">
               <elementProp name="" elementType="HTTPArgument">
                 <boolProp name="HTTPArgument.always_encode">false</boolProp>
-                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"Hi"}],"max_tokens":20}</stringProp>
+                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"List 20 AML red flags banks use to detect money laundering, one per line."}],"max_tokens":200}</stringProp>
                 <stringProp name="Argument.metadata">=</stringProp>
               </elementProp>
             </collectionProp>
@@ -797,11 +797,11 @@ if (region.contains("secondary")) {
         <!-- 4s think time + max_tokens=20 + 3 threads:
              ~33 RPM × (20 response + ~10 prompt) = ~981 TPM per Silver sub.
              Credit Underwriting APIM cap: 1K TPM/sub — blast stays just under it.
-             Combined with AML Screening Suite 4 + Branch Advisor Suite 1 → ~2247 TPM
-             → approaches Foundry 5K primary → APIM <choose> failover.
-             Primary saturates → secondary-failover rows appear in App Insights. -->
+             max_tokens=200 + ~10 input ≈ 210 tokens/req × 30 RPM = ~630 TPM.
+             Combined AML blast + CU blast + BA sustained ≈ 1410 TPM → Foundry 1K cap
+             → APIM <choose> failover → secondary-failover in App Insights. -->
         <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer"
-                       testname="Think Time 4s — ~981 TPM per Silver sub towards Foundry 5K cap" enabled="true">
+                       testname="Think Time 4s — high-token blast towards Foundry 1K cap" enabled="true">
           <stringProp name="ConstantTimer.delay">4000</stringProp>
         </ConstantTimer>
         <hashTree/>
@@ -814,7 +814,7 @@ if (region.contains("secondary")) {
             <collectionProp name="Arguments.arguments">
               <elementProp name="" elementType="HTTPArgument">
                 <boolProp name="HTTPArgument.always_encode">false</boolProp>
-                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"Hi"}],"max_tokens":20}</stringProp>
+                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"List 20 credit risk indicators used in underwriting mortgage applications, one per line."}],"max_tokens":200}</stringProp>
                 <stringProp name="Argument.metadata">=</stringProp>
               </elementProp>
             </collectionProp>

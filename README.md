@@ -148,12 +148,30 @@ Developers request access through ServiceNow and receive a single APIM subscript
 
 | Tier | Models | TPM | RPM | Approval | Use case |
 |---|---|---|---|---|---|
-| **Bronze** | gpt-4o-mini, Phi-4 | 10,000 | 60 | Self-service | Dev/test, low-volume apps |
-| **Silver** | gpt-4o, gpt-4o-mini, Phi-4, Llama-3 + Agents API | 50,000 | 300 | Self-service | Production workloads |
+| **Bronze** | gpt-4o-mini, Phi-4 | 500 | 60 | Self-service | Dev/test, low-volume apps |
+| **Silver** | gpt-4o, gpt-4o-mini, Phi-4, Llama-3 + Agents API | 5,000 | 300 | Self-service | Production workloads |
 | **Gold** | All models + Agents API (PCI DSS scope eligible) | 200,000 | Unlimited | Requires approval | High-volume / PCI workloads |
 
 > **TPM** = Tokens Per Minute estimated at request time (prompt + completion).  
 > **RPM** = Requests Per Minute enforced per subscription key.
+
+```mermaid
+xychart-beta
+    title "Per-subscription Token throughput (TPM)"
+    x-axis ["Bronze", "Silver", "Gold"]
+    y-axis "Tokens per Minute" 0 --> 200000
+    bar [500, 5000, 200000]
+```
+
+```mermaid
+xychart-beta
+    title "Per-subscription Request throughput (RPM)"
+    x-axis ["Bronze", "Silver"]
+    y-axis "Requests per Minute" 0 --> 300
+    bar [60, 300]
+```
+
+> Gold has no RPM cap. All tiers include multi-region circuit-breaker failover (East US → West US).
 
 ### API Surfaces
 
