@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.39.26.7824",
-      "templateHash": "5123857774205470308"
+      "templateHash": "14694220397325214415"
     }
   },
   "parameters": {
@@ -88,7 +88,7 @@
       "name": "[format('{0}/{1}', format('{0}-primary', parameters('accountPrefix')), 'gpt-4o-mini')]",
       "sku": {
         "name": "Standard",
-        "capacity": 5
+        "capacity": 2
       },
       "properties": {
         "model": {
