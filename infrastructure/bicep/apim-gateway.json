@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.39.26.7824",
-      "templateHash": "16318205972860503123"
+      "templateHash": "7063706902195718195"
     }
   },
   "parameters": {
@@ -651,9 +651,9 @@
     {
       "type": "Microsoft.ApiManagement/service/subscriptions",
       "apiVersion": "2023-05-01-preview",
-      "name": "[format('{0}/{1}', parameters('apimName'), 'bronze-test')]",
+      "name": "[format('{0}/{1}', parameters('apimName'), 'app-branch-advisor')]",
       "properties": {
-        "displayName": "Bronze Test Subscription",
+        "displayName": "Branch Advisor",
         "scope": "[resourceId('Microsoft.ApiManagement/service/products', parameters('apimName'), 'ai-bronze')]",
         "state": "active"
       },
@@ -665,9 +665,23 @@
     {
       "type": "Microsoft.ApiManagement/service/subscriptions",
       "apiVersion": "2023-05-01-preview",
-      "name": "[format('{0}/{1}', parameters('apimName'), 'silver-test')]",
+      "name": "[format('{0}/{1}', parameters('apimName'), 'app-aml-screening')]",
       "properties": {
-        "displayName": "Silver Test Subscription",
+        "displayName": "AML Screening",
+        "scope": "[resourceId('Microsoft.ApiManagement/service/products', parameters('apimName'), 'ai-silver')]",
+        "state": "active"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ApiManagement/service', parameters('apimName'))]",
+        "[resourceId('Microsoft.ApiManagement/service/products', parameters('apimName'), 'ai-silver')]"
+      ]
+    },
+    {
+      "type": "Microsoft.ApiManagement/service/subscriptions",
+      "apiVersion": "2023-05-01-preview",
+      "name": "[format('{0}/{1}', parameters('apimName'), 'app-credit-underwriting')]",
+      "properties": {
+        "displayName": "Credit Underwriting",
         "scope": "[resourceId('Microsoft.ApiManagement/service/products', parameters('apimName'), 'ai-silver')]",
         "state": "active"
       },
@@ -756,13 +770,17 @@
       "type": "string",
       "value": "[reference(resourceId('Microsoft.Insights/components', parameters('appInsightsName')), '2020-02-02').ConnectionString]"
     },
-    "bronzeTestSubId": {
+    "branchAdvisorSubId": {
       "type": "string",
-      "value": "bronze-test"
+      "value": "app-branch-advisor"
     },
-    "silverTestSubId": {
+    "amlScreeningSubId": {
       "type": "string",
-      "value": "silver-test"
+      "value": "app-aml-screening"
+    },
+    "creditUnderwritingSubId": {
+      "type": "string",
+      "value": "app-credit-underwriting"
     },
     "appInsightsResourceId": {
       "type": "string",

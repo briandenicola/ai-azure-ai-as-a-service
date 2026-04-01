@@ -1,0 +1,368 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.39.26.7824",
+      "templateHash": "5123857774205470308"
+    }
+  },
+  "parameters": {
+    "accountPrefix": {
+      "type": "string",
+      "defaultValue": "foundry",
+      "metadata": {
+        "description": "Prefix for resource names (e.g. \"contoso\")"
+      }
+    },
+    "primaryLocation": {
+      "type": "string",
+      "defaultValue": "eastus",
+      "metadata": {
+        "description": "Primary region — must match APIM circuit breaker primaryBackend"
+      }
+    },
+    "secondaryLocation": {
+      "type": "string",
+      "defaultValue": "westus",
+      "metadata": {
+        "description": "Secondary region — must match APIM circuit breaker secondaryBackend"
+      }
+    },
+    "developerObjectIds": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Object IDs of developers who should get Cognitive Services User access"
+      }
+    },
+    "deployRbac": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Set to true to create role assignments (requires Owner or User Access Administrator)"
+      }
+    },
+    "vnetResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource ID of the VNet to link the private DNS zone to. Required when privateEndpointSubnetId is set."
+      }
+    },
+    "privateEndpointSubnetId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource ID of the private endpoint subnet (snet-private-endpoints). Leave empty to skip private endpoint creation."
+      }
+    }
+  },
+  "variables": {
+    "deployPrivateEndpoints": "[not(empty(parameters('privateEndpointSubnetId')))]",
+    "cognitiveServicesUserRoleId": "a97b65f3-24c7-4388-baec-2e87135dc908"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.CognitiveServices/accounts",
+      "apiVersion": "2024-10-01",
+      "name": "[format('{0}-primary', parameters('accountPrefix'))]",
+      "location": "[parameters('primaryLocation')]",
+      "kind": "AIServices",
+      "sku": {
+        "name": "S0"
+      },
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "publicNetworkAccess": "Disabled",
+        "disableLocalAuth": true,
+        "customSubDomainName": "[format('{0}-primary', parameters('accountPrefix'))]"
+      }
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/deployments",
+      "apiVersion": "2024-10-01",
+      "name": "[format('{0}/{1}', format('{0}-primary', parameters('accountPrefix')), 'gpt-4o-mini')]",
+      "sku": {
+        "name": "Standard",
+        "capacity": 5
+      },
+      "properties": {
+        "model": {
+          "format": "OpenAI",
+          "name": "gpt-4o",
+          "version": "2024-11-20"
+        },
+        "versionUpgradeOption": "OnceCurrentVersionExpired"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-primary', parameters('accountPrefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/deployments",
+      "apiVersion": "2024-10-01",
+      "name": "[format('{0}/{1}', format('{0}-primary', parameters('accountPrefix')), 'phi-4')]",
+      "sku": {
+        "name": "GlobalStandard",
+        "capacity": 1
+      },
+      "properties": {
+        "model": {
+          "format": "Microsoft",
+          "name": "Phi-4",
+          "version": "2"
+        },
+        "versionUpgradeOption": "OnceCurrentVersionExpired"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-primary', parameters('accountPrefix')))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', format('{0}-primary', parameters('accountPrefix')), 'gpt-4o-mini')]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts",
+      "apiVersion": "2024-10-01",
+      "name": "[format('{0}-secondary', parameters('accountPrefix'))]",
+      "location": "[parameters('secondaryLocation')]",
+      "kind": "AIServices",
+      "sku": {
+        "name": "S0"
+      },
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "publicNetworkAccess": "Disabled",
+        "disableLocalAuth": true,
+        "customSubDomainName": "[format('{0}-secondary', parameters('accountPrefix'))]"
+      }
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/deployments",
+      "apiVersion": "2024-10-01",
+      "name": "[format('{0}/{1}', format('{0}-secondary', parameters('accountPrefix')), 'gpt-4o-mini')]",
+      "sku": {
+        "name": "Standard",
+        "capacity": 30
+      },
+      "properties": {
+        "model": {
+          "format": "OpenAI",
+          "name": "gpt-4o",
+          "version": "2024-11-20"
+        },
+        "versionUpgradeOption": "OnceCurrentVersionExpired"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-secondary', parameters('accountPrefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/deployments",
+      "apiVersion": "2024-10-01",
+      "name": "[format('{0}/{1}', format('{0}-secondary', parameters('accountPrefix')), 'phi-4')]",
+      "sku": {
+        "name": "GlobalStandard",
+        "capacity": 1
+      },
+      "properties": {
+        "model": {
+          "format": "Microsoft",
+          "name": "Phi-4",
+          "version": "2"
+        },
+        "versionUpgradeOption": "OnceCurrentVersionExpired"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-secondary', parameters('accountPrefix')))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', format('{0}-secondary', parameters('accountPrefix')), 'gpt-4o-mini')]"
+      ]
+    },
+    {
+      "condition": "[variables('deployPrivateEndpoints')]",
+      "type": "Microsoft.Network/privateDnsZones",
+      "apiVersion": "2020-06-01",
+      "name": "privatelink.cognitiveservices.azure.com",
+      "location": "global",
+      "properties": {}
+    },
+    {
+      "condition": "[variables('deployPrivateEndpoints')]",
+      "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+      "apiVersion": "2020-06-01",
+      "name": "[format('{0}/{1}', 'privatelink.cognitiveservices.azure.com', 'link-foundry-dns-to-vnet')]",
+      "location": "global",
+      "properties": {
+        "virtualNetwork": {
+          "id": "[parameters('vnetResourceId')]"
+        },
+        "registrationEnabled": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.cognitiveservices.azure.com')]"
+      ]
+    },
+    {
+      "condition": "[variables('deployPrivateEndpoints')]",
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2023-05-01",
+      "name": "[format('pe-{0}-primary', parameters('accountPrefix'))]",
+      "location": "[parameters('primaryLocation')]",
+      "properties": {
+        "subnet": {
+          "id": "[parameters('privateEndpointSubnetId')]"
+        },
+        "privateLinkServiceConnections": [
+          {
+            "name": "[format('plsc-{0}-primary', parameters('accountPrefix'))]",
+            "properties": {
+              "privateLinkServiceId": "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-primary', parameters('accountPrefix')))]",
+              "groupIds": [
+                "account"
+              ]
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-primary', parameters('accountPrefix')))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', format('{0}-primary', parameters('accountPrefix')), 'gpt-4o-mini')]",
+        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', format('{0}-primary', parameters('accountPrefix')), 'phi-4')]"
+      ]
+    },
+    {
+      "condition": "[variables('deployPrivateEndpoints')]",
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}', format('pe-{0}-primary', parameters('accountPrefix')), 'default')]",
+      "properties": {
+        "privateDnsZoneConfigs": [
+          {
+            "name": "privatelink-cognitiveservices",
+            "properties": {
+              "privateDnsZoneId": "[if(variables('deployPrivateEndpoints'), resourceId('Microsoft.Network/privateDnsZones', 'privatelink.cognitiveservices.azure.com'), '')]"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}-primary', parameters('accountPrefix')))]",
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.cognitiveservices.azure.com')]"
+      ]
+    },
+    {
+      "condition": "[variables('deployPrivateEndpoints')]",
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2023-05-01",
+      "name": "[format('pe-{0}-secondary', parameters('accountPrefix'))]",
+      "location": "[parameters('primaryLocation')]",
+      "properties": {
+        "subnet": {
+          "id": "[parameters('privateEndpointSubnetId')]"
+        },
+        "privateLinkServiceConnections": [
+          {
+            "name": "[format('plsc-{0}-secondary', parameters('accountPrefix'))]",
+            "properties": {
+              "privateLinkServiceId": "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-secondary', parameters('accountPrefix')))]",
+              "groupIds": [
+                "account"
+              ]
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-secondary', parameters('accountPrefix')))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', format('{0}-secondary', parameters('accountPrefix')), 'gpt-4o-mini')]",
+        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', format('{0}-secondary', parameters('accountPrefix')), 'phi-4')]"
+      ]
+    },
+    {
+      "condition": "[variables('deployPrivateEndpoints')]",
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}', format('pe-{0}-secondary', parameters('accountPrefix')), 'default')]",
+      "properties": {
+        "privateDnsZoneConfigs": [
+          {
+            "name": "privatelink-cognitiveservices",
+            "properties": {
+              "privateDnsZoneId": "[if(variables('deployPrivateEndpoints'), resourceId('Microsoft.Network/privateDnsZones', 'privatelink.cognitiveservices.azure.com'), '')]"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateEndpoints', format('pe-{0}-secondary', parameters('accountPrefix')))]",
+        "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.cognitiveservices.azure.com')]"
+      ]
+    },
+    {
+      "copy": {
+        "name": "devRoleFoundry1",
+        "count": "[length(if(parameters('deployRbac'), parameters('developerObjectIds'), createArray()))]"
+      },
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[format('Microsoft.CognitiveServices/accounts/{0}', format('{0}-primary', parameters('accountPrefix')))]",
+      "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', format('{0}-primary', parameters('accountPrefix'))), if(parameters('deployRbac'), parameters('developerObjectIds'), createArray())[copyIndex()], variables('cognitiveServicesUserRoleId'))]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('cognitiveServicesUserRoleId'))]",
+        "principalId": "[if(parameters('deployRbac'), parameters('developerObjectIds'), createArray())[copyIndex()]]",
+        "principalType": "User"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-primary', parameters('accountPrefix')))]"
+      ]
+    },
+    {
+      "copy": {
+        "name": "devRoleFoundry2",
+        "count": "[length(if(parameters('deployRbac'), parameters('developerObjectIds'), createArray()))]"
+      },
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[format('Microsoft.CognitiveServices/accounts/{0}', format('{0}-secondary', parameters('accountPrefix')))]",
+      "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', format('{0}-secondary', parameters('accountPrefix'))), if(parameters('deployRbac'), parameters('developerObjectIds'), createArray())[copyIndex()], variables('cognitiveServicesUserRoleId'))]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('cognitiveServicesUserRoleId'))]",
+        "principalId": "[if(parameters('deployRbac'), parameters('developerObjectIds'), createArray())[copyIndex()]]",
+        "principalType": "User"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-secondary', parameters('accountPrefix')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "foundry1Endpoint": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', format('{0}-primary', parameters('accountPrefix'))), '2024-10-01').endpoint]"
+    },
+    "foundry1ResourceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-primary', parameters('accountPrefix')))]"
+    },
+    "foundry1PrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', format('{0}-primary', parameters('accountPrefix'))), '2024-10-01', 'full').identity.principalId]"
+    },
+    "foundry2Endpoint": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', format('{0}-secondary', parameters('accountPrefix'))), '2024-10-01').endpoint]"
+    },
+    "foundry2ResourceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-secondary', parameters('accountPrefix')))]"
+    },
+    "foundry2PrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', format('{0}-secondary', parameters('accountPrefix'))), '2024-10-01', 'full').identity.principalId]"
+    }
+  }
+}

@@ -16,31 +16,35 @@
 
   TEST SUITES (all run in parallel)
   ==================================
-  Suite 1  [Bronze] Sustained  — 3 threads, 8s think, 120s, max_tokens=5   (~285 TPM, well under 500 Bronze cap)
-  Suite 2  [Bronze] Blast      — 8 threads, 3s think, 100s, max_tokens=1 (disabled)
-  Suite 3  [Silver] Sustained  — 3 threads, 8s think, 120s, max_tokens=5   (~285 TPM, well under 1K Silver cap)
-  Suite 4  [Silver] Blast      — 3 threads, 4s think, 100s, max_tokens=20  (~981 TPM, just under 1K Silver cap)
+  Suite 1  [BranchAdvisor]    Sustained  — 3 threads, 8s think, 120s, max_tokens=5   (~285 TPM, well under 500 Bronze cap)
+  Suite 2  [BranchAdvisor]    Blast      — 8 threads, 3s think, 100s, max_tokens=1 (disabled)
+  Suite 3  [AMLScreening]     Sustained  — 3 threads, 8s think, 120s, max_tokens=5   (~285 TPM, well under 1K Silver cap)
+  Suite 4  [AMLScreening]     Blast      — 3 threads, 4s think, 100s, max_tokens=20  (~981 TPM, just under 1K Silver cap)
+  Suite 5  [CreditUnderwriting] Sustained — 3 threads, 8s think, 120s, max_tokens=5   (~285 TPM, well under 1K Silver cap)
+  Suite 6  [CreditUnderwriting] Blast     — 3 threads, 4s think, 100s, max_tokens=20  (~981 TPM, just under 1K Silver cap)
 
-  Silver blast: ~33 RPM × (20 response + ~10 prompt) ≈ 981 TPM ≈ Foundry 1K primary cap.
-  Bronze sustained adds ~285 TPM → combined ~1266 TPM > 1K Foundry → Foundry 429s → APIM failover.
-  Primary saturates within ~60s of ramp-up, then BOTH subscribers see secondary-failover.
+  Combined TPM pressure:
+    AMLScreening blast ~981 + CreditUnderwriting blast ~981 + BranchAdvisor ~285 = ~2247 TPM >> Foundry 5K primary cap.
+    AML + Credit each approach their individual 1K Silver sub cap; combined multi-sub load saturates Foundry.
+    Primary saturates → Foundry 429 → APIM <choose> → secondary-failover for all three subscribers.
 
   ASSERTIONS
   ==========
   All suites assert HTTP 200 (APIM transparent retry on 429).
   X-Backend-Region-Used is extracted per request and tallied per subscription.
-  tearDown sampler reports Bronze failover% and Silver failover% separately.
+  tearDown sampler reports BranchAdvisor, AMLScreening, and CreditUnderwriting failover% separately.
 
   PREREQUISITES (Azure Load Testing env vars)
   ============================================
-    APIM_HOSTNAME = agw-contoso-ai-primary.eastus.cloudapp.azure.com
-    API_VERSION   = 2024-10-21
-    BRONZE_KEY    = <bronze subscription key>
-    SILVER_KEY    = <silver subscription key>
+    APIM_HOSTNAME        = agw-contoso-ai-primary.eastus.cloudapp.azure.com
+    API_VERSION          = 2024-10-21
+    BRONZE_KEY           = <Branch Advisor subscription key>   (app-branch-advisor)
+    SILVER_KEY           = <AML Screening subscription key>    (app-aml-screening)
+    SILVER_KEY_2         = <Credit Underwriting subscription key> (app-credit-underwriting)
 
   Additional uploaded files:
     appgw-system.properties  — trustStore=NONE (re-used from smoke test)
-    multi-sub-user.properties — both keys injected as USER_PROPERTIES at
+    multi-sub-user.properties — all three keys injected as USER_PROPERTIES at
                                  ALT startup, resolves ${__P()} before TestPlan
 
   POLICY REQUIREMENT
@@ -80,6 +84,11 @@
           <elementProp name="SILVER_KEY" elementType="Argument">
             <stringProp name="Argument.name">SILVER_KEY</stringProp>
             <stringProp name="Argument.value">${__P(SILVER_KEY,)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="SILVER_KEY_2" elementType="Argument">
+            <stringProp name="Argument.name">SILVER_KEY_2</stringProp>
+            <stringProp name="Argument.value">${__P(SILVER_KEY_2,)}</stringProp>
             <stringProp name="Argument.metadata">=</stringProp>
           </elementProp>
         </collectionProp>
@@ -145,14 +154,16 @@ HttpsURLConnection.setDefaultHostnameVerifier({ hostname, session -> true } as H
 log.info("[SSL] Trust-all installed for AppGW self-signed cert.")
 
 // ── Per-subscription failover counters (thread-safe AtomicIntegers) ──────────
-props.put("bronzePrimary",  new java.util.concurrent.atomic.AtomicInteger(0))
-props.put("bronzeFailover", new java.util.concurrent.atomic.AtomicInteger(0))
-props.put("silverPrimary",  new java.util.concurrent.atomic.AtomicInteger(0))
-props.put("silverFailover", new java.util.concurrent.atomic.AtomicInteger(0))
-log.info("[Counters] bronzePrimary/bronzeFailover/silverPrimary/silverFailover initialised to 0.")
+props.put("branchAdvisorPrimary",      new java.util.concurrent.atomic.AtomicInteger(0))
+props.put("branchAdvisorFailover",     new java.util.concurrent.atomic.AtomicInteger(0))
+props.put("amlScreeningPrimary",       new java.util.concurrent.atomic.AtomicInteger(0))
+props.put("amlScreeningFailover",      new java.util.concurrent.atomic.AtomicInteger(0))
+props.put("creditUnderwritingPrimary", new java.util.concurrent.atomic.AtomicInteger(0))
+props.put("creditUnderwritingFailover",new java.util.concurrent.atomic.AtomicInteger(0))
+log.info("[Counters] branchAdvisor/amlScreening/creditUnderwriting primary+failover counters initialised to 0.")
 
 // ── Key fallback: OS env → JMeter props (belt-and-suspenders) ─────────────────
-['BRONZE_KEY', 'SILVER_KEY', 'APIM_HOSTNAME', 'API_VERSION'].each { varName ->
+['BRONZE_KEY', 'SILVER_KEY', 'SILVER_KEY_2', 'APIM_HOSTNAME', 'API_VERSION'].each { varName ->
     def current = props.get(varName)
     if (current != null &amp;&amp; current.length() &gt; 0) {
         log.info("[Config] " + varName + " already set (len=" + current.length() + ")")
@@ -167,7 +178,7 @@ log.info("[Counters] bronzePrimary/bronzeFailover/silverPrimary/silverFailover i
     }
 }
 
-log.info("[Setup] Multi-sub failover test ready. 4 thread groups starting in parallel.")
+log.info("[Setup] Multi-sub failover test ready. 6 thread groups (BranchAdvisor / AMLScreening / CreditUnderwriting) starting in parallel.")
           </stringProp>
         </JSR223Sampler>
         <hashTree/>
@@ -195,7 +206,7 @@ log.info("[Setup] Multi-sub failover test ready. 4 thread groups starting in par
       </ThreadGroup>
       <hashTree>
         <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager"
-                       testname="Bronze Auth + OWASP headers" enabled="true">
+                       testname="Branch Advisor Auth + OWASP headers" enabled="true">
           <collectionProp name="HeaderManager.headers">
             <elementProp name="Ocp-Apim-Subscription-Key" elementType="Header">
               <stringProp name="Header.name">Ocp-Apim-Subscription-Key</stringProp>
@@ -224,7 +235,7 @@ log.info("[Setup] Multi-sub failover test ready. 4 thread groups starting in par
         <hashTree/>
 
         <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
-                          testname="[Bronze-Sustained] POST chat/completions"
+                          testname="[Branch Advisor-Sustained] POST chat/completions"
                           enabled="true">
           <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
           <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
@@ -250,7 +261,7 @@ log.info("[Setup] Multi-sub failover test ready. 4 thread groups starting in par
             <collectionProp name="Asserion.test_strings">
               <stringProp name="49586">200</stringProp>
             </collectionProp>
-            <stringProp name="Assertion.custom_message">Bronze sustained must see 200 — APIM retry shields client from 429</stringProp>
+            <stringProp name="Assertion.custom_message">Branch Advisor sustained must see 200 — APIM retry shields client from 429</stringProp>
             <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
             <boolProp name="Assertion.assume_success">false</boolProp>
             <intProp name="Assertion.test_type">8</intProp>
@@ -269,14 +280,14 @@ log.info("[Setup] Multi-sub failover test ready. 4 thread groups starting in par
           <hashTree/>
 
           <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor"
-                               testname="Track Bronze failover counter" enabled="true">
+                               testname="Track Branch Advisor failover counter" enabled="true">
             <stringProp name="scriptLanguage">groovy</stringProp>
             <stringProp name="script">
 def region = vars.get("backendRegion") ?: "primary"
 if (region.contains("secondary")) {
-    props.get("bronzeFailover").incrementAndGet()
+    props.get("branchAdvisorFailover").incrementAndGet()
 } else {
-    props.get("bronzePrimary").incrementAndGet()
+    props.get("branchAdvisorPrimary").incrementAndGet()
 }
             </stringProp>
           </JSR223PostProcessor>
@@ -285,19 +296,19 @@ if (region.contains("secondary")) {
       </hashTree>
 
       <!-- ================================================================= -->
-      <!-- Suite 2: Bronze — Failover Blast DISABLED                         -->
-      <!-- Bronze APIM product policy enforces 60 RPM at <inbound>, BEFORE   -->
-      <!-- the <backend> retry/failover section. A Bronze blast exceeds the   -->
-      <!-- 60 RPM cap at APIM, returning 429 to the client without ever       -->
-      <!-- reaching Foundry — so the failover-retry policy never fires.       -->
-      <!--                                                                     -->
-      <!-- Bronze failover is instead tested via Suite 1 (Bronze sustained):  -->
-      <!-- when Silver blast saturates the shared primary Foundry TPM cap     -->
-      <!-- (1K TPM), Bronze sustained requests also receive Foundry 429s,     -->
-      <!-- triggering the APIM retry/failover policy for Bronze too.          -->
+      <!-- Suite 2: Branch Advisor — Failover Blast DISABLED                  -->
+      <!-- Branch Advisor APIM product enforces 60 RPM at <inbound>, BEFORE   -->
+      <!-- the <backend> retry/failover section. A Branch Advisor blast        -->
+      <!-- exceeds the 60 RPM cap at APIM, returning 429 without ever          -->
+      <!-- reaching Foundry — so the failover-retry policy never fires.        -->
+      <!--                                                                      -->
+      <!-- Branch Advisor failover is tested via Suite 1 (sustained):          -->
+      <!-- when AML Screening blast saturates shared primary Foundry TPM        -->
+      <!-- (5K TPM), Branch Advisor sustained requests also see Foundry 429s,  -->
+      <!-- triggering the APIM retry/failover policy for Branch Advisor too.   -->
       <!-- ================================================================= -->
       <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup"
-                   testname="[Bronze] Failover Blast — DISABLED (see comment)" enabled="false">
+                   testname="[Branch Advisor] Failover Blast — DISABLED (see comment)" enabled="false">
         <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
         <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
                      guiclass="LoopControlPanel" testclass="LoopController">
@@ -312,7 +323,7 @@ if (region.contains("secondary")) {
       </ThreadGroup>
       <hashTree>
         <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager"
-                       testname="Bronze Auth + OWASP headers" enabled="true">
+                       testname="Branch Advisor Auth + OWASP headers" enabled="true">
           <collectionProp name="HeaderManager.headers">
             <elementProp name="Ocp-Apim-Subscription-Key" elementType="Header">
               <stringProp name="Header.name">Ocp-Apim-Subscription-Key</stringProp>
@@ -342,7 +353,7 @@ if (region.contains("secondary")) {
         <hashTree/>
 
         <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
-                          testname="[Bronze-Blast] POST chat/completions"
+                          testname="[Branch Advisor-Blast] POST chat/completions"
                           enabled="true">
           <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
           <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
@@ -368,7 +379,7 @@ if (region.contains("secondary")) {
             <collectionProp name="Asserion.test_strings">
               <stringProp name="49586">200</stringProp>
             </collectionProp>
-            <stringProp name="Assertion.custom_message">Bronze blast must see 200 — APIM retry shields client from 429</stringProp>
+            <stringProp name="Assertion.custom_message">Branch Advisor blast must see 200 — APIM retry shields client from 429</stringProp>
             <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
             <boolProp name="Assertion.assume_success">false</boolProp>
             <intProp name="Assertion.test_type">8</intProp>
@@ -387,14 +398,14 @@ if (region.contains("secondary")) {
           <hashTree/>
 
           <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor"
-                               testname="Track Bronze failover counter" enabled="true">
+                               testname="Track Branch Advisor failover counter" enabled="true">
             <stringProp name="scriptLanguage">groovy</stringProp>
             <stringProp name="script">
 def region = vars.get("backendRegion") ?: "primary"
 if (region.contains("secondary")) {
-    props.get("bronzeFailover").incrementAndGet()
+    props.get("branchAdvisorFailover").incrementAndGet()
 } else {
-    props.get("bronzePrimary").incrementAndGet()
+    props.get("branchAdvisorPrimary").incrementAndGet()
 }
             </stringProp>
           </JSR223PostProcessor>
@@ -403,10 +414,10 @@ if (region.contains("secondary")) {
       </hashTree>
 
       <!-- ================================================================= -->
-      <!-- Suite 3: Silver — Sustained traffic (3 threads, 8s think, 120s)   -->
+      <!-- Suite 3: AML Screening — Sustained traffic (3 threads, 8s think, 120s) -->
       <!-- ================================================================= -->
       <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup"
-                   testname="[Silver] Sustained — gpt-4o-mini" enabled="true">
+                   testname="[AML Screening] Sustained — gpt-4o-mini" enabled="true">
         <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
         <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
                      guiclass="LoopControlPanel" testclass="LoopController">
@@ -421,7 +432,7 @@ if (region.contains("secondary")) {
       </ThreadGroup>
       <hashTree>
         <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager"
-                       testname="Silver Auth + OWASP headers" enabled="true">
+                       testname="AML Screening Auth + OWASP headers" enabled="true">
           <collectionProp name="HeaderManager.headers">
             <elementProp name="Ocp-Apim-Subscription-Key" elementType="Header">
               <stringProp name="Header.name">Ocp-Apim-Subscription-Key</stringProp>
@@ -450,7 +461,7 @@ if (region.contains("secondary")) {
         <hashTree/>
 
         <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
-                          testname="[Silver-Sustained] POST chat/completions"
+                          testname="[AML Screening-Sustained] POST chat/completions"
                           enabled="true">
           <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
           <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
@@ -476,7 +487,7 @@ if (region.contains("secondary")) {
             <collectionProp name="Asserion.test_strings">
               <stringProp name="49586">200</stringProp>
             </collectionProp>
-            <stringProp name="Assertion.custom_message">Silver sustained must see 200 — APIM retry shields client from 429</stringProp>
+            <stringProp name="Assertion.custom_message">AML Screening sustained must see 200 — APIM retry shields client from 429</stringProp>
             <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
             <boolProp name="Assertion.assume_success">false</boolProp>
             <intProp name="Assertion.test_type">8</intProp>
@@ -495,14 +506,14 @@ if (region.contains("secondary")) {
           <hashTree/>
 
           <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor"
-                               testname="Track Silver failover counter" enabled="true">
+                               testname="Track AML Screening failover counter" enabled="true">
             <stringProp name="scriptLanguage">groovy</stringProp>
             <stringProp name="script">
 def region = vars.get("backendRegion") ?: "primary"
 if (region.contains("secondary")) {
-    props.get("silverFailover").incrementAndGet()
+    props.get("amlScreeningFailover").incrementAndGet()
 } else {
-    props.get("silverPrimary").incrementAndGet()
+    props.get("amlScreeningPrimary").incrementAndGet()
 }
             </stringProp>
           </JSR223PostProcessor>
@@ -511,14 +522,15 @@ if (region.contains("secondary")) {
       </hashTree>
 
       <!-- ================================================================= -->
-      <!-- Suite 4: Silver — Failover Blast (3 threads, 4s think, 100s)      -->
-      <!-- 3 threads × 4s think + ~900ms response ≈ 36 RPM × ~27 tok ≈ 981 TPM -->
-      <!-- Silver APIM cap: 1K TPM/sub → blast stays just under cap.         -->
-      <!-- Combined with Bronze 285 TPM → ~1266 TPM to Foundry 1K → 429.    -->
-      <!-- Once primary 429s, ALL requests (Bronze + Silver) see failover.    -->
+      <!-- Suite 4: AML Screening — Failover Blast (3 threads, 4s think, 100s) -->
+      <!-- 3 threads × 4s think + ~900ms response ≈ 36 RPM × ~27 tok ≈ 981 TPM  -->
+      <!-- AML Screening APIM cap: 1K TPM/sub → blast stays just under cap.   -->
+      <!-- Combined with Branch Advisor 285 TPM + Credit Underwriting Suite 6  -->
+      <!-- → ~2247 TPM total → approaches Foundry 5K primary cap → 429.         -->
+      <!-- Once primary 429s, ALL three LOB apps see failover.                 -->
       <!-- ================================================================= -->
       <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup"
-                   testname="[Silver] Failover Blast — gpt-4o-mini (max_tokens=20)" enabled="true">
+                   testname="[AML Screening] Failover Blast — gpt-4o-mini (max_tokens=20)" enabled="true">
         <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
         <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
                      guiclass="LoopControlPanel" testclass="LoopController">
@@ -533,7 +545,7 @@ if (region.contains("secondary")) {
       </ThreadGroup>
       <hashTree>
         <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager"
-                       testname="Silver Auth + OWASP headers" enabled="true">
+                       testname="AML Screening Auth + OWASP headers" enabled="true">
           <collectionProp name="HeaderManager.headers">
             <elementProp name="Ocp-Apim-Subscription-Key" elementType="Header">
               <stringProp name="Header.name">Ocp-Apim-Subscription-Key</stringProp>
@@ -556,18 +568,19 @@ if (region.contains("secondary")) {
         <hashTree/>
 
         <!-- 4s think time + max_tokens=20 + 3 threads:
-             ~33 RPM × (20 response + ~10 prompt) = ~981 TPM ≈ Foundry 1K primary cap.
-             Silver APIM cap is 1K TPM/sub — blast stays just under it, passes to Foundry.
-             Bronze adds ~285 TPM → combined ~1266 TPM → Foundry 429 → APIM <choose> failover.
-             Primary saturates within ~60s → secondary-failover rows appear in App Insights. -->
+             ~33 RPM × (20 response + ~10 prompt) = ~981 TPM per Silver sub.
+             AML Screening APIM cap: 1K TPM/sub — blast stays just under it, passes to Foundry.
+             Branch Advisor adds ~285 TPM; with Credit Underwriting Suite 6 also running,
+             combined ~2247 TPM → approaches Foundry 5K primary → APIM <choose> failover.
+             Primary saturates → secondary-failover rows appear in App Insights. -->
         <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer"
-                       testname="Think Time 4s — ~981 TPM approaches Foundry 1K cap" enabled="true">
+                       testname="Think Time 4s — ~981 TPM per Silver sub towards Foundry 5K cap" enabled="true">
           <stringProp name="ConstantTimer.delay">4000</stringProp>
         </ConstantTimer>
         <hashTree/>
 
         <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
-                          testname="[Silver-Blast] POST chat/completions"
+                          testname="[AML Screening-Blast] POST chat/completions"
                           enabled="true">
           <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
           <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
@@ -593,7 +606,7 @@ if (region.contains("secondary")) {
             <collectionProp name="Asserion.test_strings">
               <stringProp name="49586">200</stringProp>
             </collectionProp>
-            <stringProp name="Assertion.custom_message">Silver blast must see 200 — APIM retry shields client from 429</stringProp>
+            <stringProp name="Assertion.custom_message">AML Screening blast must see 200 — APIM retry shields client from 429</stringProp>
             <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
             <boolProp name="Assertion.assume_success">false</boolProp>
             <intProp name="Assertion.test_type">8</intProp>
@@ -612,14 +625,241 @@ if (region.contains("secondary")) {
           <hashTree/>
 
           <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor"
-                               testname="Track Silver failover counter" enabled="true">
+                               testname="Track AML Screening failover counter" enabled="true">
             <stringProp name="scriptLanguage">groovy</stringProp>
             <stringProp name="script">
 def region = vars.get("backendRegion") ?: "primary"
 if (region.contains("secondary")) {
-    props.get("silverFailover").incrementAndGet()
+    props.get("amlScreeningFailover").incrementAndGet()
 } else {
-    props.get("silverPrimary").incrementAndGet()
+    props.get("amlScreeningPrimary").incrementAndGet()
+}
+            </stringProp>
+          </JSR223PostProcessor>
+          <hashTree/>
+        </hashTree>
+      </hashTree>
+
+      <!-- ================================================================= -->
+      <!-- Suite 5: Credit Underwriting — Sustained traffic (3 threads, 8s think, 120s) -->
+      <!-- ================================================================= -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup"
+                   testname="[Credit Underwriting] Sustained — gpt-4o-mini" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">true</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">3</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">5</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">120</stringProp>
+        <stringProp name="ThreadGroup.delay">0</stringProp>
+      </ThreadGroup>
+      <hashTree>
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager"
+                       testname="Credit Underwriting Auth + OWASP headers" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="Ocp-Apim-Subscription-Key" elementType="Header">
+              <stringProp name="Header.name">Ocp-Apim-Subscription-Key</stringProp>
+              <stringProp name="Header.value">${SILVER_KEY_2}</stringProp>
+            </elementProp>
+            <elementProp name="Content-Type" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="Accept" elementType="Header">
+              <stringProp name="Header.name">Accept</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="User-Agent" elementType="Header">
+              <stringProp name="Header.name">User-Agent</stringProp>
+              <stringProp name="Header.value">Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer"
+                       testname="Think Time 8s" enabled="true">
+          <stringProp name="ConstantTimer.delay">8000</stringProp>
+        </ConstantTimer>
+        <hashTree/>
+
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
+                          testname="[Credit Underwriting-Sustained] POST chat/completions"
+                          enabled="true">
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"Reply with one word: Hello"}],"max_tokens":5}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">${APIM_HOSTNAME}</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <stringProp name="HTTPSampler.path">/openai/deployments/gpt-4o-mini/chat/completions?api-version=${API_VERSION}</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion"
+                             testname="Assert 200" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49586">200</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Credit Underwriting sustained must see 200 — APIM retry shields client from 429</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">8</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+
+          <RegexExtractor guiclass="RegexExtractorGui" testclass="RegexExtractor"
+                          testname="Extract X-Backend-Region-Used" enabled="true">
+            <stringProp name="RegexExtractor.useHeaders">true</stringProp>
+            <stringProp name="RegexExtractor.refname">backendRegion</stringProp>
+            <stringProp name="RegexExtractor.regex">X-Backend-Region-Used: (.+?)[\r\n]</stringProp>
+            <stringProp name="RegexExtractor.template">$1$</stringProp>
+            <stringProp name="RegexExtractor.default">primary</stringProp>
+            <stringProp name="RegexExtractor.match_no">1</stringProp>
+          </RegexExtractor>
+          <hashTree/>
+
+          <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor"
+                               testname="Track Credit Underwriting failover counter" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="script">
+def region = vars.get("backendRegion") ?: "primary"
+if (region.contains("secondary")) {
+    props.get("creditUnderwritingFailover").incrementAndGet()
+} else {
+    props.get("creditUnderwritingPrimary").incrementAndGet()
+}
+            </stringProp>
+          </JSR223PostProcessor>
+          <hashTree/>
+        </hashTree>
+      </hashTree>
+
+      <!-- ================================================================= -->
+      <!-- Suite 6: Credit Underwriting — Failover Blast (3 threads, 4s think, 100s) -->
+      <!-- 3 threads × 4s think + ~900ms response ≈ 36 RPM × ~27 tok ≈ 981 TPM  -->
+      <!-- Credit Underwriting APIM cap: 1K TPM/sub → blast stays just under cap. -->
+      <!-- Combined with AML Screening Suite 4 + Branch Advisor Suite 1:          -->
+      <!-- ~2247 TPM total → approaches Foundry 5K primary cap → 429.             -->
+      <!-- Once primary 429s, ALL three LOB apps see failover.                    -->
+      <!-- ================================================================= -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup"
+                   testname="[Credit Underwriting] Failover Blast — gpt-4o-mini (max_tokens=20)" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">true</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">3</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">5</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">100</stringProp>
+        <stringProp name="ThreadGroup.delay">5</stringProp>
+      </ThreadGroup>
+      <hashTree>
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager"
+                       testname="Credit Underwriting Auth + OWASP headers" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="Ocp-Apim-Subscription-Key" elementType="Header">
+              <stringProp name="Header.name">Ocp-Apim-Subscription-Key</stringProp>
+              <stringProp name="Header.value">${SILVER_KEY_2}</stringProp>
+            </elementProp>
+            <elementProp name="Content-Type" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="Accept" elementType="Header">
+              <stringProp name="Header.name">Accept</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="User-Agent" elementType="Header">
+              <stringProp name="Header.name">User-Agent</stringProp>
+              <stringProp name="Header.value">Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <!-- 4s think time + max_tokens=20 + 3 threads:
+             ~33 RPM × (20 response + ~10 prompt) = ~981 TPM per Silver sub.
+             Credit Underwriting APIM cap: 1K TPM/sub — blast stays just under it.
+             Combined with AML Screening Suite 4 + Branch Advisor Suite 1 → ~2247 TPM
+             → approaches Foundry 5K primary → APIM <choose> failover.
+             Primary saturates → secondary-failover rows appear in App Insights. -->
+        <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer"
+                       testname="Think Time 4s — ~981 TPM per Silver sub towards Foundry 5K cap" enabled="true">
+          <stringProp name="ConstantTimer.delay">4000</stringProp>
+        </ConstantTimer>
+        <hashTree/>
+
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
+                          testname="[Credit Underwriting-Blast] POST chat/completions"
+                          enabled="true">
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"Hi"}],"max_tokens":20}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">${APIM_HOSTNAME}</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <stringProp name="HTTPSampler.path">/openai/deployments/gpt-4o-mini/chat/completions?api-version=${API_VERSION}</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion"
+                             testname="Assert 200" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49586">200</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Credit Underwriting blast must see 200 — APIM retry shields client from 429</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">8</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+
+          <RegexExtractor guiclass="RegexExtractorGui" testclass="RegexExtractor"
+                          testname="Extract X-Backend-Region-Used" enabled="true">
+            <stringProp name="RegexExtractor.useHeaders">true</stringProp>
+            <stringProp name="RegexExtractor.refname">backendRegion</stringProp>
+            <stringProp name="RegexExtractor.regex">X-Backend-Region-Used: (.+?)[\r\n]</stringProp>
+            <stringProp name="RegexExtractor.template">$1$</stringProp>
+            <stringProp name="RegexExtractor.default">primary</stringProp>
+            <stringProp name="RegexExtractor.match_no">1</stringProp>
+          </RegexExtractor>
+          <hashTree/>
+
+          <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor"
+                               testname="Track Credit Underwriting failover counter" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="script">
+def region = vars.get("backendRegion") ?: "primary"
+if (region.contains("secondary")) {
+    props.get("creditUnderwritingFailover").incrementAndGet()
+} else {
+    props.get("creditUnderwritingPrimary").incrementAndGet()
 }
             </stringProp>
           </JSR223PostProcessor>
@@ -646,32 +886,41 @@ if (region.contains("secondary")) {
                        testname="[Summary] Per-subscription failover statistics" enabled="true">
           <stringProp name="scriptLanguage">groovy</stringProp>
           <stringProp name="script">
-def bp = (props.get("bronzePrimary")  as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
-def bf = (props.get("bronzeFailover") as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
-def sp = (props.get("silverPrimary")  as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
-def sf = (props.get("silverFailover") as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+def bap = (props.get("branchAdvisorPrimary")   as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+def baf = (props.get("branchAdvisorFailover")  as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+def amlp = (props.get("amlScreeningPrimary")   as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+def amlf = (props.get("amlScreeningFailover")  as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+def cup  = (props.get("creditUnderwritingPrimary")  as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+def cuf  = (props.get("creditUnderwritingFailover") as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
 
-def bTotal = bp + bf
-def sTotal = sp + sf
-def bPct   = bTotal > 0 ? String.format("%.1f", (bf / (double)bTotal) * 100) : "0.0"
-def sPct   = sTotal > 0 ? String.format("%.1f", (sf / (double)sTotal) * 100) : "0.0"
-def total  = bTotal + sTotal
-def aTotal = bf + sf
-def aPct   = total > 0 ? String.format("%.1f", (aTotal / (double)total) * 100) : "0.0"
+def baTotal  = bap + baf
+def amlTotal = amlp + amlf
+def cuTotal  = cup + cuf
+def baPct    = baTotal  > 0 ? String.format("%.1f", (baf  / (double)baTotal)  * 100) : "0.0"
+def amlPct   = amlTotal > 0 ? String.format("%.1f", (amlf / (double)amlTotal) * 100) : "0.0"
+def cuPct    = cuTotal  > 0 ? String.format("%.1f", (cuf  / (double)cuTotal)  * 100) : "0.0"
 
-def bStatus = bf > 0 ? "PASS — failover observed" : "INFO — no failover (increase threads or check policy)"
-def sStatus = sf > 0 ? "PASS — failover observed" : "INFO — no failover (increase threads or check policy)"
+def total    = baTotal + amlTotal + cuTotal
+def allFail  = baf + amlf + cuf
+def aPct     = total > 0 ? String.format("%.1f", (allFail / (double)total) * 100) : "0.0"
+
+def baStatus  = baf  > 0 ? "PASS — failover observed" : "INFO — no failover (increase threads or check policy)"
+def amlStatus = amlf > 0 ? "PASS — failover observed" : "INFO — no failover (increase threads or check policy)"
+def cuStatus  = cuf  > 0 ? "PASS — failover observed" : "INFO — no failover (increase threads or check policy)"
 
 def msg = """
 === MULTI-SUBSCRIPTION FAILOVER RESULTS ===
 
-  [Bronze]  primary=${bp}  failover=${bf}  total=${bTotal}  failover%=${bPct}%
-            ${bStatus}
+  [Branch Advisor]       primary=${bap}  failover=${baf}  total=${baTotal}  failover%=${baPct}%
+                         ${baStatus}
 
-  [Silver]  primary=${sp}  failover=${sf}  total=${sTotal}  failover%=${sPct}%
-            ${sStatus}
+  [AML Screening]        primary=${amlp}  failover=${amlf}  total=${amlTotal}  failover%=${amlPct}%
+                         ${amlStatus}
 
-  [COMBINED] primary=${bp+sp}  failover=${aTotal}  total=${total}  failover%=${aPct}%
+  [Credit Underwriting]  primary=${cup}  failover=${cuf}  total=${cuTotal}  failover%=${cuPct}%
+                         ${cuStatus}
+
+  [COMBINED]  primary=${bap+amlp+cup}  failover=${allFail}  total=${total}  failover%=${aPct}%
 
   Verify in Log Analytics:
     AppRequests
@@ -689,8 +938,10 @@ log.info(msg)
 SampleResult.setResponseData(msg, "UTF-8")
 SampleResult.setResponseCodeOK()
 SampleResult.setSampleLabel(
-    "Failover summary — Bronze: " + bf + "/" + bTotal + " (" + bPct + "%)  " +
-    "Silver: " + sf + "/" + sTotal + " (" + sPct + "%)")
+    "Failover summary — " +
+    "BranchAdvisor: " + baf + "/" + baTotal + " (" + baPct + "%)  " +
+    "AMLScreening: "  + amlf + "/" + amlTotal + " (" + amlPct + "%)  " +
+    "CreditUnderwriting: " + cuf + "/" + cuTotal + " (" + cuPct + "%)")
           </stringProp>
         </JSR223Sampler>
         <hashTree/>

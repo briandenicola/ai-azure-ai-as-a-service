@@ -63,15 +63,17 @@ resource foundry1 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
 // gpt-4o-mini 2024-07-18 was deprecated 2026-03-31; gpt-4o 2024-11-20 is the
 // current GA replacement.  Deployment name kept as 'gpt-4o-mini' so the APIM
 // policy URL (/openai/deployments/gpt-4o-mini/chat/completions) is unchanged.
-// capacity=2 (2K TPM, 12 RPM): saturates almost immediately under any blast load,
-// ensuring primary→secondary failover is visible in the workbook within seconds.
-// capacity=1 was never serving requests (gpt-4o Standard requires ≥2 for RPM gating).
+// capacity=5 (5K TPM): well above the Silver 1K + Bronze 500 combined product caps;
+// primary will only 429 once combined traffic (Silver ~981 + Bronze ~285 = ~1266 TPM)
+// exceeds the per-deployment limit — but with 5K that won't happen unless multiple
+// Silver subs run concurrently. Raise further if load tests need higher throughput.
+// capacity=1 was used for demo saturation; 5K is the recommended minimum for production.
 resource gpt4oMini1 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
   parent: foundry1
   name: 'gpt-4o-mini'
   sku: {
     name: 'Standard'
-    capacity: 1  // 1K TPM, 6 RPM — Silver blast (≈1K TPM) approaches limit; Bronze adds ~285 TPM → combined ~1.3K triggers failover
+    capacity: 5  // 5K TPM — above single-sub Silver+Bronze peak (~1.3K); failover via combined multi-sub load
   }
   properties: {
     model: {
