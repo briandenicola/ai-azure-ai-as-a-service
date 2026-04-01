@@ -697,13 +697,13 @@ resource openaiInferenceApi 'Microsoft.ApiManagement/service/apis@2023-05-01-pre
 }
 
 // ==========================================
-// Resource: openai-inference API-level Policy — Failover Retry + Observability
+// Resource: openai-inference API-level Policy — Circuit-Breaker Failover + Observability
 //
 // Applied at the API scope so it runs inside every product policy's execution
 // for the openai-inference API.  Responsibilities:
 //   1. Route all requests to the primary Foundry endpoint by default.
-//   2. On HTTP 429 or 5xx, retry once on the secondary endpoint (transparent
-//      to the caller — client always sees 200 if secondary succeeds).
+//   2. When primary returns 429 (TPM exhausted), trip the circuit breaker for
+//      30 seconds — subsequent requests route directly to secondary.
 //   3. Stamp X-Backend-Region-Used response header with "primary" or
 //      "secondary-failover" so load-test JMeter assertions and App Insights
 //      queries can confirm failover occurred.
@@ -712,17 +712,18 @@ resource openaiInferenceApi 'Microsoft.ApiManagement/service/apis@2023-05-01-pre
 //   {{foundry-primary-endpoint}}   provisioned by this Bicep file
 //   {{foundry-secondary-endpoint}} provisioned by this Bicep file
 //
-// Backend failover: APIM's <backend> section allows exactly ONE top-level policy.
-// The <retry> wrapper satisfies this constraint while enabling same-request failover:
-//   - First attempt: context.Response is null → <choose> does nothing → <forward-request>
-//     calls primary Foundry.
-//   - If primary returns 429 or 5xx: <retry> fires its second attempt → <choose>
-//     switches backend to secondary and updates selectedBackend → <forward-request>
-//     calls secondary Foundry → caller sees 200 with X-Backend-Region-Used: secondary-failover.
-//   - If primary returns 200: <retry> condition is false → no retry → primary response returned.
-// NOTE: do NOT add <base /> to this backend section — APIM rejects multiple top-level
-// elements in <backend>, and the global <forward-request /> must NOT run for this API
-// (it would double-call the backend on every request).
+// Pattern: cache-based circuit breaker (avoids <retry> Content-Length mismatch bug)
+//   INBOUND:  Check "primary-circuit-open" cache key.
+//             If set → route to secondary (circuit open, primary saturated).
+//             Else   → route to primary (circuit closed, normal path).
+//   BACKEND:  <base /> → delegates to global <forward-request />.
+//             NO retry loop, no Content-Length mismatch risk.
+//   OUTBOUND: If primary 429 → open circuit for 30s.
+//             If primary 200 → close circuit immediately (primary recovered).
+//
+// Failover visibility: the first 429 event trips the circuit; the next 30s of
+// requests see backend=secondary-failover in App Insights. JMeter Assert-200
+// passes on all secondary-routed requests, providing clean proof of failover.
 // ==========================================
 resource openaiInferenceApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2023-05-01-preview' = {
   parent: openaiInferenceApi
@@ -732,34 +733,37 @@ resource openaiInferenceApiPolicy 'Microsoft.ApiManagement/service/apis/policies
     value: '''<policies>
   <inbound>
     <base />
-    <set-variable name="selectedBackend" value="primary" />
-    <set-backend-service base-url="{{foundry-primary-endpoint}}/openai" />
+    <cache-lookup-value key="primary-circuit-open" variable-name="primaryCircuitOpen" />
+    <choose>
+      <when condition="@(context.Variables.ContainsKey(&quot;primaryCircuitOpen&quot;))">
+        <set-backend-service base-url="{{foundry-secondary-endpoint}}/openai" />
+        <set-variable name="selectedBackend" value="secondary-failover" />
+      </when>
+      <otherwise>
+        <set-backend-service base-url="{{foundry-primary-endpoint}}/openai" />
+        <set-variable name="selectedBackend" value="primary" />
+      </otherwise>
+    </choose>
   </inbound>
   <backend>
-    <!-- Single top-level policy required by APIM validation.
-         <retry> fires the body once (primary), then retries on 429/5xx (secondary).
-         On first attempt context.Response is null so <choose> is a no-op. -->
-    <retry condition="@(context.Response != null &amp;&amp; (context.Response.StatusCode == 429 || context.Response.StatusCode &gt;= 500))" count="1" interval="0" first-fast-retry="true">
-      <choose>
-        <when condition="@(context.Response != null &amp;&amp; (context.Response.StatusCode == 429 || context.Response.StatusCode &gt;= 500) &amp;&amp; (string)context.Variables.GetValueOrDefault(&quot;selectedBackend&quot;, &quot;primary&quot;) == &quot;primary&quot;)">
-          <set-backend-service base-url="{{foundry-secondary-endpoint}}/openai" />
-          <set-variable name="selectedBackend" value="secondary-failover" />
-        </when>
-      </choose>
-      <forward-request timeout="60" />
-    </retry>
+    <base />
   </backend>
   <outbound>
     <base />
+    <choose>
+      <when condition="@(context.Response.StatusCode == 429 &amp;&amp; (string)context.Variables.GetValueOrDefault(&quot;selectedBackend&quot;, &quot;primary&quot;) == &quot;primary&quot;)">
+        <cache-store-value key="primary-circuit-open" value="true" duration="30" />
+      </when>
+      <when condition="@(context.Response.StatusCode == 200 &amp;&amp; (string)context.Variables.GetValueOrDefault(&quot;selectedBackend&quot;, &quot;primary&quot;) == &quot;primary&quot;)">
+        <cache-remove-value key="primary-circuit-open" />
+      </when>
+    </choose>
     <set-header name="X-Backend-Region-Used" exists-action="override">
       <value>@(context.Variables.GetValueOrDefault("selectedBackend", "primary"))</value>
     </set-header>
   </outbound>
   <on-error>
     <base />
-    <!-- GetValueOrDefault prevents KeyNotFoundException when auth fails before
-         inbound sets selectedBackend — without this, missing/invalid subscription
-         keys escalate to 500 instead of returning the correct 401. -->
     <set-header name="X-Backend-Region-Used" exists-action="override">
       <value>@(context.Variables.GetValueOrDefault("selectedBackend", "unknown"))</value>
     </set-header>
