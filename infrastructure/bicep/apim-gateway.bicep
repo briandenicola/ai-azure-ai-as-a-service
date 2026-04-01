@@ -408,13 +408,13 @@ resource bronzeProductPolicy 'Microsoft.ApiManagement/service/products/policies@
 
 // ─── Product: Silver ────────────────────────────────────────────────────────
 // Self-service, no approval. Inference + Agents API.
-// gpt-4o, gpt-4o-mini, Phi-4, Llama-3-70b. 1 K TPM · 300 RPM · failover.
+// gpt-4o, gpt-4o-mini, Phi-4, Llama-3-70b. 5 K TPM · 300 RPM · failover.
 resource silverProduct 'Microsoft.ApiManagement/service/products@2023-05-01-preview' = {
   parent: apim
   name: 'ai-silver'
   properties: {
     displayName: 'AI Silver'
-    description: 'Mid-tier AI access. Models: gpt-4o, gpt-4o-mini, Phi-4, Llama-3-70b + Agents API. 1K TPM, 300 RPM. Multi-region failover included.'
+    description: 'Mid-tier AI access. Models: gpt-4o, gpt-4o-mini, Phi-4, Llama-3-70b + Agents API. 5K TPM, 300 RPM. Multi-region failover included.'
     subscriptionRequired: true
     approvalRequired: false
     state: 'published'
@@ -466,9 +466,8 @@ resource silverProductPolicy 'Microsoft.ApiManagement/service/products/policies@
         </return-response>
       </when>
     </choose>
-    <!-- TPM cap: 1 K tokens/min — single Silver sub nearly saturates Foundry 1K cap;
-         combined with Bronze (~285 TPM) the shared Foundry pool reliably hits 1 K. -->
-    <azure-openai-token-limit tokens-per-minute="1000"
+    <!-- TPM cap: 5 K tokens/min — raised from 1K after v23 failover proof. -->
+    <azure-openai-token-limit tokens-per-minute="5000"
       counter-key="@(context.Subscription.Id)"
       estimate-prompt-tokens="true"
       remaining-tokens-header-name="X-Token-Remaining" />
