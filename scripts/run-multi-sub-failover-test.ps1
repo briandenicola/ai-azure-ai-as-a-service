@@ -81,11 +81,17 @@ $SILVER_KEY = (az rest --method POST `
     --uri "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$ALT_RG/providers/Microsoft.ApiManagement/service/$APIM_NAME/subscriptions/silver-test/listSecrets?api-version=2022-08-01" `
     2>$null | ConvertFrom-Json).primaryKey
 
-if (-not $BRONZE_KEY) { Write-Error "Failed to retrieve Bronze subscription key." }
-if (-not $SILVER_KEY)  { Write-Error "Failed to retrieve Silver subscription key." }
+$SILVER_KEY_2 = (az rest --method POST `
+    --uri "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$ALT_RG/providers/Microsoft.ApiManagement/service/$APIM_NAME/subscriptions/app-credit-underwriting/listSecrets?api-version=2022-08-01" `
+    2>$null | ConvertFrom-Json).primaryKey
 
-Write-Host "  Bronze key: $($BRONZE_KEY.Substring(0,8))... (60 RPM — sustained suites only)" -ForegroundColor Green
-Write-Host "  Silver key: $($SILVER_KEY.Substring(0,8))... (300 RPM — safe for blast suites)" -ForegroundColor Green
+if (-not $BRONZE_KEY)   { Write-Error "Failed to retrieve Bronze subscription key (app-branch-advisor)." }
+if (-not $SILVER_KEY)   { Write-Error "Failed to retrieve Silver subscription key (app-aml-screening)." }
+if (-not $SILVER_KEY_2) { Write-Error "Failed to retrieve Silver Key 2 (app-credit-underwriting). Credit Underwriting threads will send an empty key and receive 401." }
+
+Write-Host "  Bronze key (Branch Advisor):      $($BRONZE_KEY.Substring(0,8))... (60 RPM — sustained only)" -ForegroundColor Green
+Write-Host "  Silver key (AML Screening):       $($SILVER_KEY.Substring(0,8))... (300 RPM — blast safe)" -ForegroundColor Green
+Write-Host "  Silver key 2 (Credit Underwriting): $($SILVER_KEY_2.Substring(0,8))... (300 RPM — blast safe)" -ForegroundColor Green
 
 # ── Step 3: Create / update ALT test definition ─────────────────────────────────
 Write-Host ""
@@ -119,6 +125,7 @@ if (-not $testExists) {
         "--env", "API_VERSION=2024-10-21",
         "--env", "BRONZE_KEY=$BRONZE_KEY",
         "--env", "SILVER_KEY=$SILVER_KEY",
+        "--env", "SILVER_KEY_2=$SILVER_KEY_2",
         "-o", "none"
     )
     if ($subnetId) { $createArgs += @("--subnet-id", $subnetId) }
@@ -137,7 +144,8 @@ if (-not $testExists) {
         "APIM_HOSTNAME=$APPGW_FQDN",
         "API_VERSION=2024-10-21",
         "BRONZE_KEY=$BRONZE_KEY",
-        "SILVER_KEY=$SILVER_KEY"
+        "SILVER_KEY=$SILVER_KEY",
+        "SILVER_KEY_2=$SILVER_KEY_2"
     )) {
         az load test update `
             --load-test-resource $ALT_RESOURCE -g $ALT_RG `
@@ -173,6 +181,7 @@ APIM_HOSTNAME=$APPGW_FQDN
 API_VERSION=2024-10-21
 BRONZE_KEY=$BRONZE_KEY
 SILVER_KEY=$SILVER_KEY
+SILVER_KEY_2=$SILVER_KEY_2
 "@ | Set-Content -Path $userPropsPath -Encoding utf8
 
 az load test file upload `
