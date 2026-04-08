@@ -203,14 +203,33 @@ Write-Host "  Duration: 600s (10 min) — blast suites generate ~5400 combined T
 Write-Host "  Expected: primary 429s → APIM retries secondary → client sees 200 for both subs"
 Write-Host ""
 
-az load test-run create `
-    --load-test-resource $ALT_RESOURCE -g $ALT_RG `
-    --test-id $TEST_ID `
-    --test-run-id $runId `
-    --display-name "Multi-sub failover $(Get-Date -Format 'yyyy-MM-dd HH:mm')" `
-    --no-wait -o none
-
-Write-Host "  Run started: $runId" -ForegroundColor Green
+$createOk = $false
+for ($attempt = 1; $attempt -le 3; $attempt++) {
+    $ErrorActionPreference = 'Continue'
+    az load test-run create `
+        --load-test-resource $ALT_RESOURCE -g $ALT_RG `
+        --test-id $TEST_ID `
+        --test-run-id $runId `
+        --display-name "Multi-sub failover $(Get-Date -Format 'yyyy-MM-dd HH:mm')" `
+        --no-wait -o none 2>&1 | Out-Null
+    $ErrorActionPreference = 'Stop'
+    # Verify the run actually exists in ALT before proceeding
+    $ErrorActionPreference = 'Continue'
+    $checkJson = az load test-run show --load-test-resource $ALT_RESOURCE -g $ALT_RG `
+        --test-run-id $runId -o json 2>$null | ConvertFrom-Json -ErrorAction SilentlyContinue
+    $ErrorActionPreference = 'Stop'
+    if ($checkJson -and $checkJson.testRunId) {
+        $createOk = $true
+        Write-Host "  Run verified: $runId (attempt $attempt)" -ForegroundColor Green
+        break
+    }
+    Write-Host "  Create attempt $attempt failed (SSL/network) — retrying in 10s..." -ForegroundColor Yellow
+    Start-Sleep 10
+}
+if (-not $createOk) {
+    Write-Error "Failed to create test run '$runId' after 3 attempts. Check 'az load test-run list' to confirm and retry."
+    exit 1
+}
 
 # ── Step 6: Poll until done ──────────────────────────────────────────────────────
 Write-Host "  Polling for completion (max 10 min — 120s test + ALT engine overhead)..." -ForegroundColor Yellow
@@ -261,11 +280,15 @@ $result = az load test-run show `
     -o json 2>$null | ConvertFrom-Json
 
 function Get-MetricAvg($series) {
-    $vals = @(@($series) | ForEach-Object { $_.data } | Where-Object { $_.value -ne $null } | Select-Object -ExpandProperty value)
+    Set-StrictMode -Off
+    $vals = @(@($series) | ForEach-Object { $_.data } | Where-Object { $_ -ne $null -and $_.value -ne $null } | Select-Object -ExpandProperty value)
+    Set-StrictMode -Version Latest
     if ($vals.Count -gt 0) { [math]::Round(($vals | Measure-Object -Average).Average, 0) } else { 'n/a' }
 }
 function Get-MetricTotal($series) {
-    $vals = @(@($series) | ForEach-Object { $_.data } | Where-Object { $_.value -ne $null } | Select-Object -ExpandProperty value)
+    Set-StrictMode -Off
+    $vals = @(@($series) | ForEach-Object { $_.data } | Where-Object { $_ -ne $null -and $_.value -ne $null } | Select-Object -ExpandProperty value)
+    Set-StrictMode -Version Latest
     if ($vals.Count -gt 0) { [math]::Round(($vals | Measure-Object -Sum).Sum, 0) } else { 0 }
 }
 
