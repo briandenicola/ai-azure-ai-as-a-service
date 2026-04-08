@@ -287,7 +287,7 @@ resource apimAppInsightsDiagnostics 'Microsoft.ApiManagement/service/diagnostics
         body: { bytes: 0 }                     // never log request body (PCI + cost)
       }
       response: {
-        headers: [ 'X-Backend-Region-Used', 'X-Correlation-Id' ]   // Foundry region + correlation echo
+        headers: [ 'X-Backend-Region-Used', 'X-Correlation-Id', 'X-Tokens-Used', 'X-Cache' ]   // Foundry region, correlation, token count, cache status
         body: { bytes: 0 }
       }
     }

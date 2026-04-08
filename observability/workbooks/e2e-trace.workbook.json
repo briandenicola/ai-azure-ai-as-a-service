@@ -823,6 +823,114 @@
     {
       "type": 1,
       "content": {
+        "json": "## Usage & Efficiency\n\nToken consumption, semantic cache performance, and model usage breakdown for the selected time window and subscription filter.\n\n> **Note:** Cache hit rate and token quota panels require `X-Cache` and `X-Tokens-Used` response headers to be captured in APIM diagnostics (`apim-gateway.bicep` `frontend.response.headers`). Run `azd provision` once after that Bicep change to start populating data."
+      },
+      "name": "section-usage"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "// Per-model usage breakdown — requests, errors, avg latency per model per subscription\n// Model name extracted from the deployment URL path: /openai/deployments/<model>/chat/completions\n// No policy changes required — model is always present in AppRequests.Url\nAppRequests\n| where TimeGenerated {TimeRange}\n| extend sub   = tostring(Properties[\"Subscription Name\"])\n| extend model = extract(@\"deployments/([^/]+)/\", 1, Url)\n| where isnotempty(model) and isnotempty(sub)\n| where \"{SubscriptionName}\" == \"value:all\" or sub == \"{SubscriptionName}\"\n| summarize\n    Requests = count(),\n    Errors   = countif(Success == false),\n    ['Avg (ms)'] = round(avg(DurationMs), 0)\n  by Model = model, Subscription = sub\n| sort by Model asc, Subscription asc",
+        "size": 1,
+        "title": "Per-model usage breakdown",
+        "showQuery": true,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "Errors",
+              "formatter": 18,
+              "formatOptions": {
+                "thresholdsOptions": "icons",
+                "thresholdsGrid": [
+                  { "operator": ">", "thresholdValue": "0", "representation": "failed", "text": "{0}" },
+                  { "operator": "Default", "thresholdValue": null, "representation": "success", "text": "{0}" }
+                ]
+              }
+            },
+            {
+              "columnMatch": "Avg (ms)",
+              "formatter": 8,
+              "formatOptions": { "palette": "greenRed" }
+            }
+          ]
+        }
+      },
+      "name": "model-usage-table"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "// Semantic cache hit rate per subscription\n// Requires X-Cache response header captured in APIM diagnostics (apim-gateway.bicep)\n// Cache policy sets X-Cache: HIT on served-from-cache responses, MISS on backend calls\nAppRequests\n| where TimeGenerated {TimeRange}\n| extend sub       = tostring(Properties[\"Subscription Name\"])\n| extend cacheStatus = tostring(Properties[\"Response-Header-X-Cache\"])\n| where isnotempty(sub) and isnotempty(cacheStatus)\n| where \"{SubscriptionName}\" == \"value:all\" or sub == \"{SubscriptionName}\"\n| summarize\n    Hits   = countif(cacheStatus == \"HIT\"),\n    Misses = countif(cacheStatus == \"MISS\"),\n    Total  = count()\n  by Subscription = sub\n| extend ['Hit Rate %'] = round(100.0 * Hits / Total, 1)\n| project Subscription, Total, ['Cache Hits'] = Hits, ['Cache Misses'] = Misses, ['Hit Rate %']\n| sort by Subscription asc",
+        "size": 1,
+        "title": "Semantic cache hit rate — per subscription",
+        "showQuery": true,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "Hit Rate %",
+              "formatter": 8,
+              "formatOptions": { "palette": "greenRed", "min": 0, "max": 100 }
+            }
+          ]
+        }
+      },
+      "name": "cache-hit-table"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "// Token quota utilization — avg TPM consumed vs product cap\n// Requires X-Tokens-Used response header captured in APIM diagnostics (apim-gateway.bicep)\n// token-quota-by-department.xml policy sets X-Tokens-Used on every response\nlet caps = datatable(sub:string, TPMCap:long) [\n    \"Branch Advisor\",      500,\n    \"AML Screening\",       5000,\n    \"Credit Underwriting\", 5000,\n    \"Investment Platform\", 5500\n];\nAppRequests\n| where TimeGenerated {TimeRange}\n| extend sub    = tostring(Properties[\"Subscription Name\"])\n| extend tokens = toint(Properties[\"Response-Header-X-Tokens-Used\"])\n| where isnotempty(sub) and tokens > 0\n| where \"{SubscriptionName}\" == \"value:all\" or sub == \"{SubscriptionName}\"\n| summarize\n    TotalTokens  = sum(tokens),\n    WindowMins   = datetime_diff('minute', max(TimeGenerated), min(TimeGenerated))\n  by sub\n| extend AvgTPM = round(toreal(TotalTokens) / max_of(toreal(WindowMins), 1.0), 0)\n| join kind=leftouter caps on sub\n| extend ['% of Cap'] = round(100.0 * AvgTPM / toreal(TPMCap), 1)\n| project\n    Subscription    = sub,\n    ['Total Tokens'] = TotalTokens,\n    ['Avg TPM']      = AvgTPM,\n    ['TPM Cap']      = TPMCap,\n    ['% of Cap']\n| sort by Subscription asc",
+        "size": 1,
+        "title": "Token quota utilization — avg TPM vs product cap",
+        "showQuery": true,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "% of Cap",
+              "formatter": 18,
+              "formatOptions": {
+                "thresholdsOptions": "icons",
+                "thresholdsGrid": [
+                  { "operator": ">=", "thresholdValue": "90", "representation": "failed",  "text": "{0}%" },
+                  { "operator": ">=", "thresholdValue": "70", "representation": "warning", "text": "{0}%" },
+                  { "operator": "Default", "thresholdValue": null, "representation": "success", "text": "{0}%" }
+                ]
+              }
+            },
+            {
+              "columnMatch": "Avg TPM",
+              "formatter": 8,
+              "formatOptions": { "palette": "greenRed" }
+            }
+          ]
+        }
+      },
+      "name": "token-quota-table"
+    },
+    {
+      "type": 1,
+      "content": {
         "json": "---\n\n**Tip:** The **Correlation ID** parameter box at the top also accepts manual input � paste a value from the trace table `Corr ID` column to isolate a specific client connection across all panels above."
       },
       "name": "footer"
