@@ -488,7 +488,7 @@ resource silverProductPolicy 'Microsoft.ApiManagement/service/products/policies@
 
 // ─── Product: Gold ──────────────────────────────────────────────────────────
 // Requires approval. Full model access (all models incl. o1) + Agents API +
-// PCI DSS scope eligibility. 200 K TPM · unlimited RPM · failover.
+// PCI DSS scope eligibility. 5.5 K TPM · 330 RPM · failover.
 // PCI DSS Req 7: Require explicit subscription approval. subscriptionsLimit: 1
 // ensures least-privilege — a single customer cannot hold multiple Gold keys.
 resource goldProduct 'Microsoft.ApiManagement/service/products@2023-05-01-preview' = {
@@ -496,7 +496,7 @@ resource goldProduct 'Microsoft.ApiManagement/service/products@2023-05-01-previe
   name: 'ai-gold'
   properties: {
     displayName: 'AI Gold'
-    description: 'Premium AI access. All models (gpt-4o, o1, Phi-4, Llama-3-70b) + Agents API + PCI DSS scope eligibility. 200K TPM, unlimited RPM. Multi-region failover included. Requires approval.'
+    description: 'Premium AI access. All models (gpt-4o, o1, Phi-4, Llama-3-70b) + Agents API + PCI DSS scope eligibility. 5,500 TPM, 330 RPM. Multi-region failover included. Requires approval.'
     subscriptionRequired: true
     // PCI DSS Req 7: manual approval required for highest-privilege tier
     approvalRequired: true
@@ -535,12 +535,14 @@ resource goldProductPolicy 'Microsoft.ApiManagement/service/products/policies@20
       </otherwise>
     </choose>
     <!-- No model allowlist — Gold has access to all models -->
-    <!-- TPM cap: 200 K tokens/min -->
-    <azure-openai-token-limit tokens-per-minute="200000"
+    <!-- TPM cap: 5.5 K tokens/min — 10% above Silver -->
+    <azure-openai-token-limit tokens-per-minute="5500"
       counter-key="@(context.Subscription.Id)"
       estimate-prompt-tokens="true"
       remaining-tokens-header-name="X-Token-Remaining" />
-    <!-- No RPM cap for Gold -->
+    <!-- Rate limit: 330 RPM — 10% above Silver -->
+    <rate-limit-by-key calls="330" renewal-period="60"
+      counter-key="@(&quot;gold-rpm-&quot; + context.Subscription.Id)" />
   </inbound>
   <backend>
     <!-- Failover is handled by the openai-inference API-level <choose> policy.

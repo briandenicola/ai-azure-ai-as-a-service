@@ -29,7 +29,7 @@ This repo is **Azure AI as a Managed Service** — an enterprise platform that e
 |---|---|---|---|---|
 | **Bronze** | `ai-bronze` | gpt-4o-mini, Phi-4 | 500 | 60 |
 | **Silver** | `ai-silver` | + gpt-4o, Llama-3-70b, Agents API | 5,000 | 300 |
-| **Gold** | `ai-gold` | All models incl. o1; Agents API | 100 M | Unlimited |
+| **Gold** | `ai-gold` | All models incl. o1; Agents API | 5,500 | 330 |
 
 ### Auth model
 - **Client → APIM**: `Ocp-Apim-Subscription-Key` header (one key per LOB/app)
