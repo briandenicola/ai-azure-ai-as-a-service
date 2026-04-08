@@ -199,7 +199,7 @@ $runId = "multi-sub-failover-$(Get-Date -Format 'yyyyMMddHHmmss')"
 Write-Host ""
 Write-Host "=== Step 5: Start test run '$runId' ===" -ForegroundColor Cyan
 Write-Host "  Suites: Bronze-sustained(3t/8s) + Bronze-blast(8t/3s) + Silver-sustained(3t/8s) + Silver-blast(8t/3s)"
-Write-Host "  Duration: 120s — blast suites generate ~5400 combined TPM > 1K primary cap"
+Write-Host "  Duration: 600s (10 min) — blast suites generate ~5400 combined TPM > 1K primary cap"
 Write-Host "  Expected: primary 429s → APIM retries secondary → client sees 200 for both subs"
 Write-Host ""
 
@@ -214,7 +214,7 @@ Write-Host "  Run started: $runId" -ForegroundColor Green
 
 # ── Step 6: Poll until done ──────────────────────────────────────────────────────
 Write-Host "  Polling for completion (max 10 min — 120s test + ALT engine overhead)..." -ForegroundColor Yellow
-$deadline  = (Get-Date).AddMinutes(10)
+$deadline  = (Get-Date).AddMinutes(18)
 $doneStates = @('DONE','FAILED','CANCELLED','SERVER_METRIC_NOT_APPLICABLE')
 $runStatus  = ''
 do {
