@@ -73,21 +73,26 @@ if ($appgwState -ne 'Running') {
 Write-Host ""
 Write-Host "=== Step 2: Fetch APIM subscription keys ===" -ForegroundColor Cyan
 
-$BRONZE_KEY = (az rest --method POST `
-    --uri "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$ALT_RG/providers/Microsoft.ApiManagement/service/$APIM_NAME/subscriptions/bronze-test/listSecrets?api-version=2022-08-01" `
-    2>$null | ConvertFrom-Json).primaryKey
+function Invoke-ApimListSecrets([string]$subName) {
+    for ($i = 1; $i -le 5; $i++) {
+        $ErrorActionPreference = 'Continue'
+        $json = az rest --method POST `
+            --uri "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$ALT_RG/providers/Microsoft.ApiManagement/service/$APIM_NAME/subscriptions/$subName/listSecrets?api-version=2022-08-01" `
+            2>$null | ConvertFrom-Json -ErrorAction SilentlyContinue
+        $ErrorActionPreference = 'Stop'
+        Set-StrictMode -Off
+        $key = $json.primaryKey
+        Set-StrictMode -Version Latest
+        if ($key) { return $key }
+        Write-Host "  Key fetch attempt $i for '$subName' failed (SSL/network) — retrying in 8s..." -ForegroundColor Yellow
+        Start-Sleep 8
+    }
+    Write-Error "Failed to fetch APIM key for subscription '$subName' after 5 attempts."
+}
 
-$SILVER_KEY = (az rest --method POST `
-    --uri "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$ALT_RG/providers/Microsoft.ApiManagement/service/$APIM_NAME/subscriptions/silver-test/listSecrets?api-version=2022-08-01" `
-    2>$null | ConvertFrom-Json).primaryKey
-
-$SILVER_KEY_2 = (az rest --method POST `
-    --uri "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$ALT_RG/providers/Microsoft.ApiManagement/service/$APIM_NAME/subscriptions/app-credit-underwriting/listSecrets?api-version=2022-08-01" `
-    2>$null | ConvertFrom-Json).primaryKey
-
-if (-not $BRONZE_KEY)   { Write-Error "Failed to retrieve Bronze subscription key (app-branch-advisor)." }
-if (-not $SILVER_KEY)   { Write-Error "Failed to retrieve Silver subscription key (app-aml-screening)." }
-if (-not $SILVER_KEY_2) { Write-Error "Failed to retrieve Silver Key 2 (app-credit-underwriting). Credit Underwriting threads will send an empty key and receive 401." }
+$BRONZE_KEY   = Invoke-ApimListSecrets 'bronze-test'
+$SILVER_KEY   = Invoke-ApimListSecrets 'silver-test'
+$SILVER_KEY_2 = Invoke-ApimListSecrets 'app-credit-underwriting'
 
 Write-Host "  Bronze key (Branch Advisor):      $($BRONZE_KEY.Substring(0,8))... (60 RPM — sustained only)" -ForegroundColor Green
 Write-Host "  Silver key (AML Screening):       $($SILVER_KEY.Substring(0,8))... (300 RPM — blast safe)" -ForegroundColor Green
