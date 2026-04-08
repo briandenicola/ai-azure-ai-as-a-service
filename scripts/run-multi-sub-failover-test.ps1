@@ -214,19 +214,41 @@ Write-Host "  Run started: $runId" -ForegroundColor Green
 
 # ── Step 6: Poll until done ──────────────────────────────────────────────────────
 Write-Host "  Polling for completion (max 10 min — 120s test + ALT engine overhead)..." -ForegroundColor Yellow
-$deadline = (Get-Date).AddMinutes(10)
+$deadline  = (Get-Date).AddMinutes(10)
+$doneStates = @('DONE','FAILED','CANCELLED','SERVER_METRIC_NOT_APPLICABLE')
+$runStatus  = ''
 do {
     Start-Sleep 20
-    $ErrorActionPreference = 'Continue'
-    $runJson = az load test-run show `
-        --load-test-resource $ALT_RESOURCE -g $ALT_RG `
-        --test-run-id $runId `
-        --query "{status:status,vus:virtualUsers,rps:requestsPerSecond,errors:errorPercentage}" `
-        -o json 2>$null | ConvertFrom-Json
-    $ErrorActionPreference = 'Stop'
     $ts = [datetime]::UtcNow.ToString('HH:mm:ss')
-    Write-Host "    ${ts}Z  $($runJson.status)  VUs=$($runJson.vus)  RPS=$($runJson.rps)  Err%=$($runJson.errors)"
-} while ($runJson.status -notin @('DONE','FAILED','CANCELLED','SERVER_METRIC_NOT_APPLICABLE') -and (Get-Date) -lt $deadline)
+    # Retry up to 3 times per poll cycle to handle transient SSL/network errors
+    $runJson = $null
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $ErrorActionPreference = 'Continue'
+        $rawJson = az load test-run show `
+            --load-test-resource $ALT_RESOURCE -g $ALT_RG `
+            --test-run-id $runId `
+            -o json 2>$null
+        $ErrorActionPreference = 'Stop'
+        if ($rawJson) {
+            $runJson = $rawJson | ConvertFrom-Json -ErrorAction SilentlyContinue
+            if ($runJson) { break }
+        }
+        if ($attempt -lt 3) { Start-Sleep 5 }
+    }
+    if (-not $runJson) {
+        Write-Host "    ${ts}Z  (poll failed — SSL/network error, retrying next cycle)" -ForegroundColor Yellow
+        continue
+    }
+    # StrictMode is on globally — use PSObject.Properties to safely read fields
+    # that may be absent during ramp-up (virtualUsers, requestsPerSecond, etc.)
+    Set-StrictMode -Off
+    $runStatus = $runJson.status            ?? ''
+    $vus       = $runJson.virtualUsers      ?? ''
+    $rps       = $runJson.requestsPerSecond ?? ''
+    $errs      = $runJson.errorPercentage   ?? ''
+    Set-StrictMode -Version Latest
+    Write-Host "    ${ts}Z  $runStatus  VUs=$vus  RPS=$rps  Err%=$errs"
+} while ($runStatus -notin $doneStates -and (Get-Date) -lt $deadline)
 
 # ── Step 7: Display results ──────────────────────────────────────────────────────
 Write-Host ""
