@@ -39,11 +39,18 @@ function Deploy-AltTest([string]$testId, [string]$displayName, [string]$desc, [s
     Write-Host "`n=== Deploying: $testId ===" -ForegroundColor Cyan
     if (-not (Test-Path $jmxPath)) { throw "JMX not found: $jmxPath" }
 
-    $ErrorActionPreference = "Continue"
-    $existing = az load test show `
-        --load-test-resource $ALT_RESOURCE -g $ALT_RG `
-        --test-id $testId -o json 2>$null | ConvertFrom-Json -ErrorAction SilentlyContinue
-    $ErrorActionPreference = "Stop"
+    $existing = $null
+    for ($r = 1; $r -le 5; $r++) {
+        $ErrorActionPreference = "Continue"
+        $existing = az load test show `
+            --load-test-resource $ALT_RESOURCE -g $ALT_RG `
+            --test-id $testId -o json 2>$null | ConvertFrom-Json -ErrorAction SilentlyContinue
+        $ErrorActionPreference = "Stop"
+        # If the call succeeded (either found or 404) stop retrying
+        if ($LASTEXITCODE -eq 0 -or ($LASTEXITCODE -eq 3 -and $null -eq $existing)) { break }
+        Write-Host "  SSL retry $r/5 checking existence of $testId..." -ForegroundColor Yellow
+        Start-Sleep 5
+    }
 
     $kvs = @(
         "APIM_HOSTNAME=$APPGW_FQDN",
