@@ -1,0 +1,720 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  JMeter 5.6 Load Test Plan: AI-as-a-Service — Steady State (1 hour)
+  ===================================================================
+
+  PURPOSE
+  =======
+  Simulates realistic steady-state usage across all four LOB subscriptions
+  (Bronze + Silver × 2 + Gold) for 1 hour.  Designed to:
+    • Generate continuous, gap-free data in Azure Monitor 5-minute bins
+      (~20 data points per bin per subscription)
+    • Stay well under all APIM product TPM/RPM caps — no throttling or failover
+    • Minimise Foundry token cost (max_tokens=5 throughout)
+    • Run concurrently with multi-sub-failover-test without interference
+      (different ALT test ID, non-overlapping TPM budget)
+
+  Traffic path:
+    JMeter → AppGW WAF v2 (HTTPS 443) → APIM openai-inference API →
+      primary Foundry (1K TPM test cap)
+    X-Backend-Region-Used: primary (expected — no failover at this load)
+
+  TEST SUITES (all run in parallel, 3600s)
+  =========================================
+  Suite 1  [BranchAdvisor]       2 threads, 30s think, 3600s, max_tokens=5  → ~4 RPM,  ~40 TPM   (Bronze cap: 500)
+  Suite 2  [AMLScreening]        2 threads, 30s think, 3600s, max_tokens=5  → ~4 RPM,  ~40 TPM   (Silver cap: 5000)
+  Suite 3  [CreditUnderwriting]  2 threads, 30s think, 3600s, max_tokens=5  → ~4 RPM,  ~40 TPM   (Silver cap: 5000)
+  Suite 4  [InvestmentPlatform]  2 threads, 30s think, 3600s, max_tokens=5  → ~4 RPM,  ~40 TPM   (Gold cap:  5500)
+
+  Combined TPM:  ~160 TPM << 1K Foundry primary cap — no 429s expected.
+  RPM per sub:   ~4 RPM << lowest cap (Bronze 60 RPM).
+
+  Graph coverage:
+    2 threads × (1 / (30s think + ~2s response)) ≈ 3.75 RPM × 60s × 5min = ~19 data points
+    per 5-minute bin per subscription → smooth continuous graphs.
+
+  ASSERTIONS
+  ==========
+  All suites assert HTTP 200.
+  X-Backend-Region-Used is extracted; tearDown reports counts (0 failover = expected).
+
+  PREREQUISITES (Azure Load Testing env vars)
+  ============================================
+    APIM_HOSTNAME  = agw-contoso-ai-primary.eastus.cloudapp.azure.com
+    API_VERSION    = 2024-10-21
+    BRONZE_KEY     = <Branch Advisor subscription key>        (app-branch-advisor)
+    SILVER_KEY     = <AML Screening subscription key>         (app-aml-screening)
+    SILVER_KEY_2   = <Credit Underwriting subscription key>   (app-credit-underwriting)
+    GOLD_KEY       = <Investment Platform subscription key>   (Investment-Platform)
+
+  Concurrent execution:
+    This test uses ALT test ID 'steady-state-test'.
+    The failover test uses 'multi-sub-failover-test'.
+    Both can run simultaneously — different ALT test definitions.
+-->
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan"
+              testname="AI-as-a-Service — Steady State (1 hour)" enabled="true">
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments"
+                   guiclass="ArgumentsPanel" testclass="Arguments">
+        <collectionProp name="Arguments.arguments">
+          <elementProp name="APIM_HOSTNAME" elementType="Argument">
+            <stringProp name="Argument.name">APIM_HOSTNAME</stringProp>
+            <stringProp name="Argument.value">${__P(APIM_HOSTNAME,agw-contoso-ai-primary.eastus.cloudapp.azure.com)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="API_VERSION" elementType="Argument">
+            <stringProp name="Argument.name">API_VERSION</stringProp>
+            <stringProp name="Argument.value">${__P(API_VERSION,2024-10-21)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="BRONZE_KEY" elementType="Argument">
+            <stringProp name="Argument.name">BRONZE_KEY</stringProp>
+            <stringProp name="Argument.value">${__P(BRONZE_KEY,)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="SILVER_KEY" elementType="Argument">
+            <stringProp name="Argument.name">SILVER_KEY</stringProp>
+            <stringProp name="Argument.value">${__P(SILVER_KEY,)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="SILVER_KEY_2" elementType="Argument">
+            <stringProp name="Argument.name">SILVER_KEY_2</stringProp>
+            <stringProp name="Argument.value">${__P(SILVER_KEY_2,)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="GOLD_KEY" elementType="Argument">
+            <stringProp name="Argument.name">GOLD_KEY</stringProp>
+            <stringProp name="Argument.value">${__P(GOLD_KEY,)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+        </collectionProp>
+      </elementProp>
+    </TestPlan>
+    <hashTree>
+
+      <!-- ================================================================= -->
+      <!-- setUp: Trust-all SSL + initialise per-subscription counters        -->
+      <!-- ================================================================= -->
+      <SetupThreadGroup guiclass="SetupThreadGroupGui" testclass="SetupThreadGroup"
+                        testname="[Setup] SSL trust-all + counters"
+                        enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">stoptest</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <intProp name="LoopController.loops">1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">1</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">0</stringProp>
+      </SetupThreadGroup>
+      <hashTree>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler"
+                       testname="Trust-all SSL + per-subscription counters"
+                       enabled="true">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="script">
+import javax.net.ssl.*
+import java.security.*
+import java.security.cert.X509Certificate
+
+// ── SSL: Step 1 ────────────────────────────────────────────────────────────────
+System.setProperty("javax.net.ssl.trustStore",         "NONE")
+System.setProperty("javax.net.ssl.trustStoreType",     "JKS")
+System.setProperty("javax.net.ssl.trustStorePassword", "")
+
+// ── SSL: Step 2 — reset JsseSSLManager cached context ─────────────────────────
+try {
+    def sslManager = Class.forName("org.apache.jmeter.util.SSLManager")
+                          .getDeclaredMethod("getInstance").invoke(null)
+    def ctxField = Class.forName("org.apache.jmeter.util.JsseSSLManager")
+                        .getDeclaredField("defaultContext")
+    ctxField.setAccessible(true)
+    ctxField.set(sslManager, null)
+    log.info("[SSL] JsseSSLManager.defaultContext reset — trust-all active")
+} catch (Exception e) {
+    log.info("[SSL] JsseSSLManager reset skipped: " + e.message)
+}
+
+// ── SSL: Step 3 — install trust-all JVM default ────────────────────────────────
+def trustAll = [
+    checkClientTrusted: { chain, authType -> },
+    checkServerTrusted: { chain, authType -> },
+    getAcceptedIssuers: { [] as X509Certificate[] }
+] as X509TrustManager
+
+def sc = SSLContext.getInstance("TLS")
+sc.init(null, [trustAll] as TrustManager[], new SecureRandom())
+SSLContext.setDefault(sc)
+HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory())
+HttpsURLConnection.setDefaultHostnameVerifier({ hostname, session -> true } as HostnameVerifier)
+log.info("[SSL] Trust-all installed for AppGW self-signed cert.")
+
+// ── Per-subscription counters (thread-safe AtomicIntegers) ────────────────────
+props.put("branchAdvisorPrimary",      new java.util.concurrent.atomic.AtomicInteger(0))
+props.put("branchAdvisorFailover",     new java.util.concurrent.atomic.AtomicInteger(0))
+props.put("amlScreeningPrimary",       new java.util.concurrent.atomic.AtomicInteger(0))
+props.put("amlScreeningFailover",      new java.util.concurrent.atomic.AtomicInteger(0))
+props.put("creditUnderwritingPrimary", new java.util.concurrent.atomic.AtomicInteger(0))
+props.put("creditUnderwritingFailover",new java.util.concurrent.atomic.AtomicInteger(0))
+props.put("investmentPlatformPrimary", new java.util.concurrent.atomic.AtomicInteger(0))
+props.put("investmentPlatformFailover",new java.util.concurrent.atomic.AtomicInteger(0))
+log.info("[Counters] All per-subscription primary+failover counters initialised to 0.")
+
+// ── Key fallback: OS env → JMeter props ───────────────────────────────────────
+['BRONZE_KEY', 'SILVER_KEY', 'SILVER_KEY_2', 'GOLD_KEY', 'APIM_HOSTNAME', 'API_VERSION'].each { varName ->
+    def current = props.get(varName)
+    if (current != null &amp;&amp; current.length() &gt; 0) {
+        log.info("[Config] " + varName + " already set (len=" + current.length() + ")")
+    } else {
+        def fromEnv = System.getenv(varName)
+        if (fromEnv != null &amp;&amp; fromEnv.length() &gt; 0) {
+            props.put(varName, fromEnv)
+            log.info("[Config] " + varName + " loaded from OS env (len=" + fromEnv.length() + ")")
+        } else {
+            log.warn("[Config] " + varName + " MISSING — test will fail!")
+        }
+    }
+}
+
+log.info("[Setup] Steady-state test ready. 4 thread groups (2 threads each, 30s think, 3600s) starting.")
+          </stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+      </hashTree>
+
+      <!-- ================================================================= -->
+      <!-- Suite 1: Branch Advisor (Bronze) — 2 threads, 30s think, 3600s    -->
+      <!-- ~4 RPM, ~40 TPM — well under Bronze 500 TPM / 60 RPM caps         -->
+      <!-- ================================================================= -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup"
+                   testname="[Branch Advisor] Steady — gpt-4o-mini" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">true</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">2</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">5</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">3600</stringProp>
+        <stringProp name="ThreadGroup.delay">0</stringProp>
+      </ThreadGroup>
+      <hashTree>
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager"
+                       testname="Branch Advisor Auth + OWASP headers" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="Ocp-Apim-Subscription-Key" elementType="Header">
+              <stringProp name="Header.name">Ocp-Apim-Subscription-Key</stringProp>
+              <stringProp name="Header.value">${BRONZE_KEY}</stringProp>
+            </elementProp>
+            <elementProp name="Content-Type" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="Accept" elementType="Header">
+              <stringProp name="Header.name">Accept</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="User-Agent" elementType="Header">
+              <stringProp name="Header.name">User-Agent</stringProp>
+              <stringProp name="Header.value">Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <!-- 30s think time — 2 threads × (1/32s) ≈ 3.75 RPM → ~19 req per 5-min bin -->
+        <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer"
+                       testname="Think Time 30s" enabled="true">
+          <stringProp name="ConstantTimer.delay">30000</stringProp>
+        </ConstantTimer>
+        <hashTree/>
+
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
+                          testname="[Branch Advisor] POST chat/completions"
+                          enabled="true">
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"What is the current prime rate?"}],"max_tokens":5}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">${APIM_HOSTNAME}</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <stringProp name="HTTPSampler.path">/openai/deployments/gpt-4o-mini/chat/completions?api-version=${API_VERSION}</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion"
+                             testname="Assert 200" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49586">200</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Branch Advisor must see 200 — no throttling expected at steady-state load</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">8</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+
+          <RegexExtractor guiclass="RegexExtractorGui" testclass="RegexExtractor"
+                          testname="Extract X-Backend-Region-Used" enabled="true">
+            <stringProp name="RegexExtractor.useHeaders">true</stringProp>
+            <stringProp name="RegexExtractor.refname">backendRegion</stringProp>
+            <stringProp name="RegexExtractor.regex">X-Backend-Region-Used: (.+?)[\r\n]</stringProp>
+            <stringProp name="RegexExtractor.template">$1$</stringProp>
+            <stringProp name="RegexExtractor.default">primary</stringProp>
+            <stringProp name="RegexExtractor.match_no">1</stringProp>
+          </RegexExtractor>
+          <hashTree/>
+
+          <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor"
+                               testname="Track Branch Advisor backend counter" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="script">
+def region = vars.get("backendRegion") ?: "primary"
+if (region.contains("secondary")) {
+    props.get("branchAdvisorFailover").incrementAndGet()
+} else {
+    props.get("branchAdvisorPrimary").incrementAndGet()
+}
+            </stringProp>
+          </JSR223PostProcessor>
+          <hashTree/>
+        </hashTree>
+      </hashTree>
+
+      <!-- ================================================================= -->
+      <!-- Suite 2: AML Screening (Silver) — 2 threads, 30s think, 3600s     -->
+      <!-- ~4 RPM, ~40 TPM — well under Silver 5000 TPM / 300 RPM caps       -->
+      <!-- ================================================================= -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup"
+                   testname="[AML Screening] Steady — gpt-4o-mini" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">true</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">2</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">5</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">3600</stringProp>
+        <stringProp name="ThreadGroup.delay">0</stringProp>
+      </ThreadGroup>
+      <hashTree>
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager"
+                       testname="AML Screening Auth + OWASP headers" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="Ocp-Apim-Subscription-Key" elementType="Header">
+              <stringProp name="Header.name">Ocp-Apim-Subscription-Key</stringProp>
+              <stringProp name="Header.value">${SILVER_KEY}</stringProp>
+            </elementProp>
+            <elementProp name="Content-Type" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="Accept" elementType="Header">
+              <stringProp name="Header.name">Accept</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="User-Agent" elementType="Header">
+              <stringProp name="Header.name">User-Agent</stringProp>
+              <stringProp name="Header.value">Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer"
+                       testname="Think Time 30s" enabled="true">
+          <stringProp name="ConstantTimer.delay">30000</stringProp>
+        </ConstantTimer>
+        <hashTree/>
+
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
+                          testname="[AML Screening] POST chat/completions"
+                          enabled="true">
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"Define AML screening in one sentence."}],"max_tokens":5}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">${APIM_HOSTNAME}</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <stringProp name="HTTPSampler.path">/openai/deployments/gpt-4o-mini/chat/completions?api-version=${API_VERSION}</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion"
+                             testname="Assert 200" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49586">200</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">AML Screening must see 200 — no throttling expected at steady-state load</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">8</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+
+          <RegexExtractor guiclass="RegexExtractorGui" testclass="RegexExtractor"
+                          testname="Extract X-Backend-Region-Used" enabled="true">
+            <stringProp name="RegexExtractor.useHeaders">true</stringProp>
+            <stringProp name="RegexExtractor.refname">backendRegion</stringProp>
+            <stringProp name="RegexExtractor.regex">X-Backend-Region-Used: (.+?)[\r\n]</stringProp>
+            <stringProp name="RegexExtractor.template">$1$</stringProp>
+            <stringProp name="RegexExtractor.default">primary</stringProp>
+            <stringProp name="RegexExtractor.match_no">1</stringProp>
+          </RegexExtractor>
+          <hashTree/>
+
+          <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor"
+                               testname="Track AML Screening backend counter" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="script">
+def region = vars.get("backendRegion") ?: "primary"
+if (region.contains("secondary")) {
+    props.get("amlScreeningFailover").incrementAndGet()
+} else {
+    props.get("amlScreeningPrimary").incrementAndGet()
+}
+            </stringProp>
+          </JSR223PostProcessor>
+          <hashTree/>
+        </hashTree>
+      </hashTree>
+
+      <!-- ================================================================= -->
+      <!-- Suite 3: Credit Underwriting (Silver) — 2 threads, 30s think, 3600s -->
+      <!-- ~4 RPM, ~40 TPM — well under Silver 5000 TPM / 300 RPM caps         -->
+      <!-- ================================================================= -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup"
+                   testname="[Credit Underwriting] Steady — gpt-4o-mini" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">true</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">2</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">5</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">3600</stringProp>
+        <stringProp name="ThreadGroup.delay">0</stringProp>
+      </ThreadGroup>
+      <hashTree>
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager"
+                       testname="Credit Underwriting Auth + OWASP headers" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="Ocp-Apim-Subscription-Key" elementType="Header">
+              <stringProp name="Header.name">Ocp-Apim-Subscription-Key</stringProp>
+              <stringProp name="Header.value">${SILVER_KEY_2}</stringProp>
+            </elementProp>
+            <elementProp name="Content-Type" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="Accept" elementType="Header">
+              <stringProp name="Header.name">Accept</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="User-Agent" elementType="Header">
+              <stringProp name="Header.name">User-Agent</stringProp>
+              <stringProp name="Header.value">Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer"
+                       testname="Think Time 30s" enabled="true">
+          <stringProp name="ConstantTimer.delay">30000</stringProp>
+        </ConstantTimer>
+        <hashTree/>
+
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
+                          testname="[Credit Underwriting] POST chat/completions"
+                          enabled="true">
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"What is a credit score?"}],"max_tokens":5}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">${APIM_HOSTNAME}</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <stringProp name="HTTPSampler.path">/openai/deployments/gpt-4o-mini/chat/completions?api-version=${API_VERSION}</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion"
+                             testname="Assert 200" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49586">200</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Credit Underwriting must see 200 — no throttling expected at steady-state load</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">8</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+
+          <RegexExtractor guiclass="RegexExtractorGui" testclass="RegexExtractor"
+                          testname="Extract X-Backend-Region-Used" enabled="true">
+            <stringProp name="RegexExtractor.useHeaders">true</stringProp>
+            <stringProp name="RegexExtractor.refname">backendRegion</stringProp>
+            <stringProp name="RegexExtractor.regex">X-Backend-Region-Used: (.+?)[\r\n]</stringProp>
+            <stringProp name="RegexExtractor.template">$1$</stringProp>
+            <stringProp name="RegexExtractor.default">primary</stringProp>
+            <stringProp name="RegexExtractor.match_no">1</stringProp>
+          </RegexExtractor>
+          <hashTree/>
+
+          <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor"
+                               testname="Track Credit Underwriting backend counter" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="script">
+def region = vars.get("backendRegion") ?: "primary"
+if (region.contains("secondary")) {
+    props.get("creditUnderwritingFailover").incrementAndGet()
+} else {
+    props.get("creditUnderwritingPrimary").incrementAndGet()
+}
+            </stringProp>
+          </JSR223PostProcessor>
+          <hashTree/>
+        </hashTree>
+      </hashTree>
+
+      <!-- ================================================================= -->
+      <!-- Suite 4: Investment Platform (Gold) — 2 threads, 30s think, 3600s  -->
+      <!-- ~4 RPM, ~40 TPM — well under Gold 5500 TPM / 330 RPM caps          -->
+      <!-- ================================================================= -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup"
+                   testname="[Investment Platform] Steady — gpt-4o-mini" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">true</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">2</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">5</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">3600</stringProp>
+        <stringProp name="ThreadGroup.delay">0</stringProp>
+      </ThreadGroup>
+      <hashTree>
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager"
+                       testname="Investment Platform Auth + OWASP headers" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="Ocp-Apim-Subscription-Key" elementType="Header">
+              <stringProp name="Header.name">Ocp-Apim-Subscription-Key</stringProp>
+              <stringProp name="Header.value">${GOLD_KEY}</stringProp>
+            </elementProp>
+            <elementProp name="Content-Type" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="Accept" elementType="Header">
+              <stringProp name="Header.name">Accept</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="User-Agent" elementType="Header">
+              <stringProp name="Header.name">User-Agent</stringProp>
+              <stringProp name="Header.value">Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer"
+                       testname="Think Time 30s" enabled="true">
+          <stringProp name="ConstantTimer.delay">30000</stringProp>
+        </ConstantTimer>
+        <hashTree/>
+
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
+                          testname="[Investment Platform] POST chat/completions"
+                          enabled="true">
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"What is portfolio diversification?"}],"max_tokens":5}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">${APIM_HOSTNAME}</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <stringProp name="HTTPSampler.path">/openai/deployments/gpt-4o-mini/chat/completions?api-version=${API_VERSION}</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion"
+                             testname="Assert 200" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49586">200</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Investment Platform must see 200 — no throttling expected at steady-state load</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">8</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+
+          <RegexExtractor guiclass="RegexExtractorGui" testclass="RegexExtractor"
+                          testname="Extract X-Backend-Region-Used" enabled="true">
+            <stringProp name="RegexExtractor.useHeaders">true</stringProp>
+            <stringProp name="RegexExtractor.refname">backendRegion</stringProp>
+            <stringProp name="RegexExtractor.regex">X-Backend-Region-Used: (.+?)[\r\n]</stringProp>
+            <stringProp name="RegexExtractor.template">$1$</stringProp>
+            <stringProp name="RegexExtractor.default">primary</stringProp>
+            <stringProp name="RegexExtractor.match_no">1</stringProp>
+          </RegexExtractor>
+          <hashTree/>
+
+          <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor"
+                               testname="Track Investment Platform backend counter" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="script">
+def region = vars.get("backendRegion") ?: "primary"
+if (region.contains("secondary")) {
+    props.get("investmentPlatformFailover").incrementAndGet()
+} else {
+    props.get("investmentPlatformPrimary").incrementAndGet()
+}
+            </stringProp>
+          </JSR223PostProcessor>
+          <hashTree/>
+        </hashTree>
+      </hashTree>
+
+      <!-- ================================================================= -->
+      <!-- tearDown: Per-subscription baseline report                         -->
+      <!-- 0 failover = expected for steady-state; non-zero = investigation   -->
+      <!-- ================================================================= -->
+      <PostThreadGroup guiclass="PostThreadGroupGui" testclass="PostThreadGroup"
+                       testname="[tearDown] Per-subscription baseline report" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <intProp name="LoopController.loops">1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">1</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">0</stringProp>
+      </PostThreadGroup>
+      <hashTree>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler"
+                       testname="[Summary] Per-subscription baseline statistics" enabled="true">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="script">
+def bap = (props.get("branchAdvisorPrimary")        as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+def baf = (props.get("branchAdvisorFailover")       as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+def amlp = (props.get("amlScreeningPrimary")        as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+def amlf = (props.get("amlScreeningFailover")       as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+def cup  = (props.get("creditUnderwritingPrimary")  as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+def cuf  = (props.get("creditUnderwritingFailover") as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+def ipp  = (props.get("investmentPlatformPrimary")  as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+def ipf  = (props.get("investmentPlatformFailover") as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+
+def baTotal  = bap + baf
+def amlTotal = amlp + amlf
+def cuTotal  = cup + cuf
+def ipTotal  = ipp + ipf
+def total    = baTotal + amlTotal + cuTotal + ipTotal
+def allFail  = baf + amlf + cuf + ipf
+
+// For steady-state: 0 failover = PASS; any failover = investigate
+def baStatus  = baf  == 0 ? "PASS — all primary (expected)" : "INVESTIGATE — unexpected failover (${baf}/${baTotal})"
+def amlStatus = amlf == 0 ? "PASS — all primary (expected)" : "INVESTIGATE — unexpected failover (${amlf}/${amlTotal})"
+def cuStatus  = cuf  == 0 ? "PASS — all primary (expected)" : "INVESTIGATE — unexpected failover (${cuf}/${cuTotal})"
+def ipStatus  = ipf  == 0 ? "PASS — all primary (expected)" : "INVESTIGATE — unexpected failover (${ipf}/${ipTotal})"
+
+def msg = """
+=== STEADY STATE BASELINE RESULTS ===
+
+  [Branch Advisor]       total=${baTotal}  primary=${bap}  failover=${baf}  — ${baStatus}
+  [AML Screening]        total=${amlTotal}  primary=${amlp}  failover=${amlf}  — ${amlStatus}
+  [Credit Underwriting]  total=${cuTotal}  primary=${cup}  failover=${cuf}  — ${cuStatus}
+  [Investment Platform]  total=${ipTotal}  primary=${ipp}  failover=${ipf}  — ${ipStatus}
+
+  [COMBINED]  total=${total}  failover=${allFail}
+
+  Note: Failover at steady-state load (~160 TPM combined) indicates
+  Foundry primary cap is lower than expected or another test is
+  running concurrently and saturating shared capacity.
+
+======================================
+"""
+log.info(msg)
+SampleResult.setResponseData(msg, "UTF-8")
+SampleResult.setResponseCodeOK()
+SampleResult.setSampleLabel(
+    "Baseline — total=${total}  BA:${bap}p/${baf}f  AML:${amlp}p/${amlf}f  CU:${cup}p/${cuf}f  IP:${ipp}p/${ipf}f")
+          </stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+      </hashTree>
+
+      <!-- Summary Report -->
+      <ResultCollector guiclass="SummaryReport" testclass="ResultCollector"
+                       testname="Summary Report" enabled="true">
+        <boolProp name="ResultCollector.error_logging">false</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration">
+            <time>true</time>
+            <latency>true</latency>
+            <timestamp>true</timestamp>
+            <success>true</success>
+            <label>true</label>
+            <code>true</code>
+            <message>true</message>
+            <threadName>true</threadName>
+            <bytes>true</bytes>
+            <connectTime>true</connectTime>
+          </value>
+        </objProp>
+        <stringProp name="filename"></stringProp>
+      </ResultCollector>
+      <hashTree/>
+
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>
