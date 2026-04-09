@@ -21,16 +21,17 @@
 
   TEST SUITES (all run in parallel, 3600s)
   =========================================
-  Suite 1  [BranchAdvisor]       2 threads, 30s think, 3600s, max_tokens=5  → ~4 RPM,  ~40 TPM   (Bronze cap: 500)
-  Suite 2  [AMLScreening]        2 threads, 30s think, 3600s, max_tokens=5  → ~4 RPM,  ~40 TPM   (Silver cap: 5000)
-  Suite 3  [CreditUnderwriting]  2 threads, 30s think, 3600s, max_tokens=5  → ~4 RPM,  ~40 TPM   (Silver cap: 5000)
-  Suite 4  [InvestmentPlatform]  2 threads, 30s think, 3600s, max_tokens=5  → ~4 RPM,  ~40 TPM   (Gold cap:  5500)
+  Suite 1  [BranchAdvisor]       2 threads, 30s think, 3600s, max_tokens=1  → ~4 RPM,  ~20 TPM   (Bronze cap: 500)
+  Suite 2  [AMLScreening]        2 threads, 30s think, 3600s, max_tokens=1  → ~4 RPM,  ~20 TPM   (Silver cap: 5000)
+  Suite 3  [CreditUnderwriting]  2 threads, 30s think, 3600s, max_tokens=1  → ~4 RPM,  ~20 TPM   (Silver cap: 5000)
+  Suite 4  [InvestmentPlatform]  2 threads, 30s think, 3600s, max_tokens=1  → ~4 RPM,  ~20 TPM   (Gold cap:  5500)
 
   Combined TPM:  ~160 TPM << 1K Foundry primary cap — no 429s expected.
   RPM per sub:   ~4 RPM << lowest cap (Bronze 60 RPM).
 
   Graph coverage:
     2 threads × (1 / (30s think + ~2s response)) ≈ 3.75 RPM × 60s × 5min = ~19 data points
+    max_tokens=1, single-word prompts → ~20 TPM/sub combined → ~80 TPM total across all 4 subs (8% of 1K primary cap)
     per 5-minute bin per subscription → smooth continuous graphs.
 
   ASSERTIONS
@@ -244,7 +245,7 @@ log.info("[Setup] Steady-state test ready. 4 thread groups (2 threads each, 30s 
             <collectionProp name="Arguments.arguments">
               <elementProp name="" elementType="HTTPArgument">
                 <boolProp name="HTTPArgument.always_encode">false</boolProp>
-                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"What is the current prime rate?"}],"max_tokens":5}</stringProp>
+                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"Hi"}],"max_tokens":1}</stringProp>
                 <stringProp name="Argument.metadata">=</stringProp>
               </elementProp>
             </collectionProp>
@@ -353,7 +354,7 @@ if (region.contains("secondary")) {
             <collectionProp name="Arguments.arguments">
               <elementProp name="" elementType="HTTPArgument">
                 <boolProp name="HTTPArgument.always_encode">false</boolProp>
-                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"Define AML screening in one sentence."}],"max_tokens":5}</stringProp>
+                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"Ok"}],"max_tokens":1}</stringProp>
                 <stringProp name="Argument.metadata">=</stringProp>
               </elementProp>
             </collectionProp>
@@ -462,7 +463,7 @@ if (region.contains("secondary")) {
             <collectionProp name="Arguments.arguments">
               <elementProp name="" elementType="HTTPArgument">
                 <boolProp name="HTTPArgument.always_encode">false</boolProp>
-                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"What is a credit score?"}],"max_tokens":5}</stringProp>
+                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"Yes"}],"max_tokens":1}</stringProp>
                 <stringProp name="Argument.metadata">=</stringProp>
               </elementProp>
             </collectionProp>
@@ -571,7 +572,7 @@ if (region.contains("secondary")) {
             <collectionProp name="Arguments.arguments">
               <elementProp name="" elementType="HTTPArgument">
                 <boolProp name="HTTPArgument.always_encode">false</boolProp>
-                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"What is portfolio diversification?"}],"max_tokens":5}</stringProp>
+                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"Go"}],"max_tokens":1}</stringProp>
                 <stringProp name="Argument.metadata">=</stringProp>
               </elementProp>
             </collectionProp>
