@@ -44,9 +44,7 @@ Applied to: /ai/completions endpoint only (not tool calls)
                 <return-response />
             </when>
         </choose>
-        
-        <!-- If not cached, continue to backend -->
-        <set-header name="X-Cache" value="MISS" />
+        <!-- MISS path: do NOT set X-Cache here — set it in outbound so it appears as a response header captured by App Insights diagnostics -->
     </inbound>
     
     <backend>
@@ -62,7 +60,11 @@ Applied to: /ai/completions endpoint only (not tool calls)
             </when>
         </choose>
         
-        <!-- 2. Add cache headers -->
-        <set-header name="X-Cache-Key" value="@((string)context.Variables["cache-key"])" />
+        <!-- 2. Add cache headers -->        <!-- X-Cache: MISS set here (outbound) so it appears as a response header captured by App Insights frontend.response.headers -->
+        <choose>
+            <when condition="@(context.Variables["cached-response"] == null)">
+                <set-header name="X-Cache" exists-action="override"><value>MISS</value></set-header>
+            </when>
+        </choose>        <set-header name="X-Cache-Key" value="@((string)context.Variables["cache-key"])" />
     </outbound>
 </policies>
