@@ -70,20 +70,23 @@ Write-Host ""
 Write-Host "=== Step 2: Fetch APIM subscription keys ===" -ForegroundColor Cyan
 
 function Invoke-ApimListSecrets([string]$subName) {
-    for ($i = 1; $i -le 5; $i++) {
-        $ErrorActionPreference = 'Continue'
-        $json = az rest --method POST `
-            --uri "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$ALT_RG/providers/Microsoft.ApiManagement/service/$APIM_NAME/subscriptions/$subName/listSecrets?api-version=2022-08-01" `
-            2>$null | ConvertFrom-Json -ErrorAction SilentlyContinue
-        $ErrorActionPreference = 'Stop'
-        Set-StrictMode -Off
-        $key = $json.primaryKey
-        Set-StrictMode -Version Latest
-        if ($key) { return $key }
-        Write-Host "  Key fetch attempt $i for '$subName' failed (SSL/network) — retrying in 8s..." -ForegroundColor Yellow
-        Start-Sleep 8
+    for ($i = 1; $i -le 10; $i++) {
+        try {
+            $result = az rest --method POST `
+                --uri "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$ALT_RG/providers/Microsoft.ApiManagement/service/$APIM_NAME/subscriptions/$subName/listSecrets?api-version=2022-08-01" `
+                2>&1
+            Set-StrictMode -Off
+            $json = $result | Where-Object { $_ -notmatch '^WARNING' } | Out-String | ConvertFrom-Json -ErrorAction SilentlyContinue
+            $key  = $json.primaryKey
+            Set-StrictMode -Version Latest
+            if ($key) { return $key }
+        } catch {
+            # SSL / network transient error — fall through to retry
+        }
+        Write-Host "  Key fetch attempt $i/10 for '$subName' failed (SSL/network) — retrying in 10s..." -ForegroundColor Yellow
+        Start-Sleep 10
     }
-    Write-Error "Failed to fetch APIM key for subscription '$subName' after 5 attempts."
+    Write-Error "Failed to fetch APIM key for subscription '$subName' after 10 attempts."
 }
 
 $BRONZE_KEY   = Invoke-ApimListSecrets 'app-branch-advisor'
