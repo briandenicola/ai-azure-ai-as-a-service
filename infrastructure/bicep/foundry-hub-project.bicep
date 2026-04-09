@@ -72,8 +72,7 @@ resource gpt4oMini1 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01
   name: 'gpt-4o-mini'
   sku: {
     name: 'Standard'
-    capacity: 5  // 5K TPM — handles steady-state (~1.6K TPM) cleanly; failover only triggers under blast (>5K TPM)
-                 // Set to 1 to force failover for demo purposes
+    capacity: 1  // 1K TPM — combined 3-LOB ~2.2K TPM exceeds burst; triggers failover to secondary
   }
   properties: {
     model: {
