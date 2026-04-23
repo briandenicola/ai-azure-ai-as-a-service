@@ -44,7 +44,7 @@ APIM sits between developers and models, providing:
 
 ### Positive 🟢
 
-1. **Cost Visibility** - Track every token at APIM layer; set quotas per department
+1. **Cost Visibility** - Track every token at APIM layer; set quotas per department. Quota operates at two layers: (a) APIM enforces a per-subscription-key **TPM** (Tokens Per Minute) and **RPM** (Requests Per Minute) cap for each tier (Bronze 500 TPM, Silver 5,000 TPM, Gold 5,500 TPM); (b) Foundry enforces an aggregate deployment capacity shared across all callers. APIM limits are always the effective constraint by design. IT Managers handle quota increase requests via ServiceNow — see [quota-management.md](../playbooks/quota-management.md).
 2. **Resilience** - Auto-failover on rate limits without app code changes
 3. **Security** - Managed Identity replaces scattered API keys
 4. **Compliance** - Audit trail of every request at the gateway layer
@@ -62,7 +62,7 @@ APIM sits between developers and models, providing:
 
 1. Deploy APIM in Premium tier (required for VNet injection and multi-region support)
 2. Create three products: `/ai/inference`, `/ai/agents`, `/ai/completions`
-3. Configure rate limiting policies (tokens per day per team)
+3. Configure rate limiting policies (tokens **per minute** per team — Bronze: 500 TPM / 60 RPM, Silver: 5,000 TPM / 300 RPM, Gold: 5,500 TPM / 330 RPM)
 4. Set up semantic caching for model endpoints
 5. Enable Application Insights integration
 6. Configure failover backends for multi-region support

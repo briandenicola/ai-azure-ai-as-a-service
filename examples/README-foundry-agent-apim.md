@@ -283,14 +283,41 @@ python examples/python/6-foundry-agent-via-apim.py
 
 ### Test 3: Verify Token Quotas Work
 
-```bash
-# Run a load test to exceed your quota
-for i in {1..1000}; do
-  python examples/python/6-foundry-agent-via-apim.py &
-done
+Your APIM subscription key is capped at its tier's **TPM** (Tokens Per Minute) limit. When that limit is hit, APIM returns HTTP 429 with a `Retry-After` header — your client should back off and retry, not spin in a tight loop.
 
-# Expected: APIM returns 429 Too Many Requests after hitting quota
+The example below sends sequential requests with proper back-off so you can observe the 429 behavior without hammering the gateway:
+
+```python
+import time
+import random
+from openai import AzureOpenAI, RateLimitError
+
+client = AzureOpenAI(
+    azure_endpoint=os.environ["AI_GATEWAY_ENDPOINT"] + "/openai",
+    api_key=os.environ["APIM_SUBSCRIPTION_KEY"],
+    api_version="2024-10-21"
+)
+
+for i in range(50):  # 50 sequential requests — enough to trip Bronze (60 RPM) in ~1 min
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": f"Request {i}: say hello"}],
+            max_tokens=20
+        )
+        print(f"[{i}] OK — {resp.usage.total_tokens} tokens")
+    except RateLimitError as e:
+        retry_after = int(e.response.headers.get("Retry-After", 5))
+        jitter = random.uniform(0, 1)
+        wait = retry_after + jitter
+        print(f"[{i}] 429 — quota hit. Waiting {wait:.1f}s (Retry-After: {retry_after}s)")
+        time.sleep(wait)
+
+# Expected: requests succeed until the tier TPM/RPM cap is reached,
+# then 429s appear with Retry-After headers. After waiting, requests resume.
 ```
+
+> **Why not `for i in {1..1000}; do ... &; done`?** Spawning 1,000 parallel processes gives you 1,000 simultaneous 429s with no back-off. It doesn't test quota behavior — it just creates noise. The sequential approach with `Retry-After` respect is the correct pattern for both testing and production.
 
 ## 📈 Monitoring
 

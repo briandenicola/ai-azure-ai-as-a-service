@@ -152,23 +152,45 @@ Developers request access through ServiceNow and receive a single APIM subscript
 | **Silver** | gpt-4o, gpt-4o-mini, Phi-4, Llama-3 + Agents API | 5,000 | 300 | Self-service | Production workloads |
 | **Gold** | All models + Agents API (PCI DSS scope eligible) | 5,500 | 330 | Requires approval | High-volume / PCI workloads |
 
-> **TPM** = Tokens Per Minute estimated at request time (prompt + completion).  
-> **RPM** = Requests Per Minute enforced per subscription key.
+> **TPM** (Tokens Per Minute) — counts the combined prompt + completion tokens across all requests in the current minute window. A typical short chat exchange is ~500–1,000 tokens; a document-processing request may be 4,000–8,000 tokens.  
+> **RPM** (Requests Per Minute) — counts the number of API calls regardless of their size. A 10-token ping and a 4,000-token document request both count as 1 RPM.
+
+#### How quota works in this platform
+
+Quota operates at **two independent layers** stacked in series:
+
+```
+Your app (subscription key)
+    │
+    ▼
+Layer 2 — APIM product limit (enforced per subscription key, per minute)
+    │  → Returns HTTP 429 with a Retry-After header if your key exceeds its tier's TPM or RPM cap
+    ▼
+Layer 1 — Foundry deployment capacity (enforced by Azure, shared across ALL callers on the platform)
+    │  → Returns HTTP 429 if the sum of all traffic saturates the total deployment capacity
+    ▼
+Model
+```
+
+**What this means in practice:**
+- When your app gets a 429, it is almost always APIM enforcing your tier's limit (Layer 2). The response includes a `Retry-After` header. Implement exponential back-off in your client.
+- If the platform-wide Foundry capacity is saturated (Layer 1), the APIM circuit-breaker policy automatically fails over to the West US secondary before returning a 429 to callers.
+- These are separate from [Microsoft's Foundry quota tier system](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits) (Tier 1–6 per Azure subscription), which governs how much total capacity the platform operator can allocate — not what your individual subscription key can use.
+
+> For full details — including how to view current usage, request a Foundry quota increase from Microsoft, and adjust tier limits — see [docs/playbooks/quota-management.md](docs/playbooks/quota-management.md).
 
 ```mermaid
-xychart-beta
-    title "Per-subscription Token throughput (TPM)"
-    x-axis ["Bronze", "Silver", "Gold"]
-    y-axis "Tokens per Minute" 0 --> 6000
-    bar [500, 5000, 5500]
+pie title Per-subscription Token throughput (TPM)
+    "Bronze (500)" : 500
+    "Silver (5,000)" : 5000
+    "Gold (5,500)" : 5500
 ```
 
 ```mermaid
-xychart-beta
-    title "Per-subscription Request throughput (RPM)"
-    x-axis ["Bronze", "Silver", "Gold"]
-    y-axis "Requests per Minute" 0 --> 350
-    bar [60, 300, 330]
+pie title Per-subscription Request throughput (RPM)
+    "Bronze (60)" : 60
+    "Silver (300)" : 300
+    "Gold (330)" : 330
 ```
 
 > All tiers include multi-region circuit-breaker failover (East US → West US). Gold requires manual approval and is limited to one subscription per customer (PCI DSS Req 7).

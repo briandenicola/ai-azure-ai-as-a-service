@@ -6,10 +6,12 @@ Welcome! Your organization has deployed Azure AI as a **managed, governed platfo
 
 Instead of managing Azure OpenAI keys directly, you work through **Azure API Management (APIM)**, which acts as your gateway. This gives you:
 
-✅ Cost controls (your team's token quota)  
+✅ Cost controls (your team's **token quota** — see below)  
 ✅ Automatic caching (faster responses)  
 ✅ Audit trails (all requests logged)  
 ✅ Simple auth (use your corporate identity)  
+
+> **What is token quota?** A *token* is roughly ¾ of a word. A short chat message might be 50 tokens; a 2-page document summary might be 4,000 tokens. Your subscription key is assigned a **Tier** (Bronze / Silver / Gold) that caps how many tokens per minute (TPM) and requests per minute (RPM) your team can send through the gateway. If you exceed the cap, the gateway returns HTTP 429 — back-off and retry. Your IT manager can increase the cap via ServiceNow. See [quota-management.md](../docs/playbooks/quota-management.md) for full details.
 
 ---
 
@@ -290,7 +292,16 @@ If using in CI/CD, ensure the service principal has:
 
 ### "429 Too Many Requests"
 
-Your team hit its token quota. Contact your IT manager to increase it in ServiceNow.
+Your team hit its token quota. There are two possible causes — the response headers tell you which:
+
+| Header present | Cause | Action |
+|---|---|---|
+| `Retry-After` set by APIM | Your subscription key exceeded its tier's TPM or RPM cap | Back-off for the number of seconds in `Retry-After`, then retry. File a ServiceNow request to increase your tier. |
+| No `Retry-After`, or it comes from Foundry | Platform-wide capacity saturated (rare — circuit-breaker should have failed over) | Contact your IT manager; this needs platform-level investigation. |
+
+Always implement **exponential back-off with jitter** in your client — do not retry immediately in a tight loop, as this makes the 429 worse.
+
+To request a higher quota: file a request in ServiceNow (ask your IT manager). See [quota-management.md](../docs/playbooks/quota-management.md) for the full process.
 
 ### "Model not found"
 

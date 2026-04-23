@@ -11,6 +11,7 @@ A practical guide showing how developers interact with the managed Azure AI plat
 1. **Request access** in ServiceNow
    - Form: "AI Platform Access Request"
    - Fields: Your name, team, use case, expected token usage
+     > **What to put for "expected token usage":** Estimate based on your use case. A short chat app with ~10 users making 20 requests/day ≈ Bronze tier (500 TPM). A production app with multiple users running document summaries ≈ Silver (5,000 TPM). Not sure? Start with Bronze — you can increase it later via ServiceNow without re-onboarding.
    - Approval: Usually within 24 hours
 
 2. **Receive credentials** via email:
@@ -96,7 +97,7 @@ DefaultAzureCredential (uses your corporate login)
 APIM Gateway
     ├─ ✅ Validates your credential
     ├─ ✅ Logs request to Application Insights
-    ├─ ✅ Checks token quota
+    ├─ ✅ Checks token quota (your tier's Tokens Per Minute cap — returns 429 with a Retry-After header if exceeded)
     ├─ ✅ Routes to Azure OpenAI
     └─ ✅ Caches response for future use
     ↓
@@ -397,17 +398,21 @@ for batch in chunks(prompts, 10):
 
 ### Common Issues & Solutions
 
-**Issue: "Token quota exceeded"**
+**Issue: "Token quota exceeded" (HTTP 429)**
 ```
-Solution: Check usage in Grafana or request increase via ServiceNow
+Your subscription key hit its tier's Tokens Per Minute (TPM) or Requests Per Minute (RPM) cap.
+Check the Retry-After header in the response — wait that many seconds, then retry.
+Longer fix: request a tier upgrade via ServiceNow, or reduce max_tokens in your requests.
 ```
 
 **Issue: "Rate limited (429)"**
 ```
-Solution: APIM is automatically retrying. If still failing:
-1. Implement exponential backoff
-2. Request quota increase
-3. Use a cheaper model
+Same as above. APIM does NOT automatically retry on your behalf — the 429 is returned to your
+client. You must implement exponential back-off with jitter in your code:
+  1. Read the Retry-After header value (seconds to wait)
+  2. Wait at least that long before retrying (add random jitter to avoid thundering herd)
+  3. If 429s persist after back-off, request a quota increase via ServiceNow
+  4. Consider using a smaller/cheaper model (e.g. gpt-4o-mini instead of gpt-4o) to stay within Bronze
 ```
 
 **Issue: "Tool call failed"**
