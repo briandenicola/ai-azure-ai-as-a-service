@@ -44,7 +44,10 @@ APIM sits between developers and models, providing:
 
 ### Positive 🟢
 
-1. **Cost Visibility** - Track every token at APIM layer; set quotas per department. Quota operates at two layers: (a) APIM enforces a per-subscription-key **TPM** (Tokens Per Minute) and **RPM** (Requests Per Minute) cap for each tier (Bronze 500 TPM, Silver 5,000 TPM, Gold 5,500 TPM); (b) Foundry enforces an aggregate deployment capacity shared across all callers. APIM limits are always the effective constraint by design. IT Managers handle quota increase requests via ServiceNow — see [quota-management.md](../playbooks/quota-management.md).
+1. **Cost Visibility** - Track every token at APIM layer; set quotas per department. Quota operates at two layers: (a) APIM enforces a per-subscription-key **TPM** (Tokens Per Minute) and **RPM** (Requests Per Minute) cap for each tier (Bronze 500 TPM, Silver 5,000 TPM, Gold 5,500 TPM); (b) Foundry enforces an aggregate deployment capacity shared across all callers. APIM limits are always the effective constraint by design.
+   - **IT Manager** owns tier governance: approves tier upgrades and manages LOB access requests via ServiceNow.
+   - **Platform Engineer** owns infrastructure capacity: adjusts Foundry deployment `capacity` in Bicep (`azd provision`) and submits quota increase requests to Microsoft when platform-wide capacity is insufficient.
+   - Developers never interact with Microsoft directly about quota — all escalation paths go through ServiceNow. See [quota-management.md](../playbooks/quota-management.md).
 2. **Resilience** - Auto-failover on rate limits without app code changes
 3. **Security** - Managed Identity replaces scattered API keys
 4. **Compliance** - Audit trail of every request at the gateway layer

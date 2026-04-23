@@ -34,6 +34,8 @@ Model
 
 APIM limits should always be the effective constraint. If the sum of all APIM product limits can exceed the Foundry deployment capacity, 429s will pass through to callers from Foundry — bypassing APIM's rate-limit accounting entirely, and without the `Retry-After` header APIM would normally set.
 
+> **Capacity Sizing Rule:** The Foundry deployment `capacity` (Layer 1) must always be greater than or equal to the maximum number of *simultaneously active* APIM subscription keys multiplied by their per-key TPM limit. Concretely: if you have 10 Silver keys (5,000 TPM each) that could all fire at once, your Foundry deployment needs at least 50,000 TPM of capacity, or APIM will shed load to Foundry before it sheds it at the gateway — breaking the per-LOB accounting model. When adding new APIM products or approving new LOB subscriptions, always verify Layer 1 capacity can absorb the worst-case combined load.
+
 ---
 
 ## Current Configured Values

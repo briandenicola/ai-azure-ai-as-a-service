@@ -303,6 +303,8 @@ Always implement **exponential back-off with jitter** in your client — do not 
 
 To request a higher quota: file a request in ServiceNow (ask your IT manager). See [quota-management.md](../docs/playbooks/quota-management.md) for the full process.
 
+> **You never need to contact Microsoft directly about quota.** Interacting with Microsoft support and managing platform-wide Foundry capacity is the Platform Engineer's responsibility — not yours. Your only action is a ServiceNow request.
+
 ### "Model not found"
 
 The model exists in Foundry but isn't exposed through your APIM endpoint yet. Contact your IT team.
