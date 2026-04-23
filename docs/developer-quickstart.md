@@ -371,3 +371,4 @@ agent = client.agents.create_agent(
 - 👉 Explore [code examples](../examples/)
 - 👉 Read [Architecture Decisions](../adr/) if you're curious about why we built it this way
 - 👉 Ask your IT manager for Grafana dashboard access
+- 👉 SDK routing questions? See [SDK Endpoint FAQ](reference/sdk-endpoint-questions.md)

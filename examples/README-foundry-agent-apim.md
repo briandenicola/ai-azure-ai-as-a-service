@@ -41,7 +41,7 @@ examples/
 │              Azure API Management (APIM)                    │
 │  ┌───────────────────────────────────────────────────────┐  │
 │  │  🚦 Policies Applied Here:                           │  │
-│  │  • Token Quota (100K TPM per department)             │  │
+│  │  • Token Quota (500–5,500 TPM by product tier)        │  │
 │  │  • Semantic Caching (30% cost reduction)             │  │
 │  │  • Circuit Breaker (multi-region failover)           │  │
 │  │  • Content Safety Filters                            │  │
@@ -169,94 +169,46 @@ This means:
 
 ## 🔧 Infrastructure Setup
 
-### Option 1: Deploy Everything (Bicep)
+All infrastructure is managed via `azd provision`. Run once from the repo root:
 
-```bash
-# Deploy APIM + Foundry + Policies
-az deployment group create \
-  --resource-group rg-ai \
-  --template-file infrastructure/bicep/apim-gateway.bicep \
-  --parameters apimName=your-company-ai
-
-az deployment group create \
-  --resource-group rg-ai \
-  --template-file infrastructure/bicep/foundry-hub-project.bicep \
-  --parameters projectName=ai-hub-project
+```powershell
+azd auth login
+azd env new <env-name>
+azd provision --no-prompt
 ```
 
-### Option 2: Existing Resources
+This provisions APIM, both Foundry accounts (East US + West US), private endpoints, VNet, RBAC, and the Event Grid automation pipeline. See the [setup playbook](../docs/playbooks/setup-apim-gateway.md) for detailed steps.
 
-If you already have APIM and Foundry set up:
+After provisioning, retrieve your APIM gateway URL:
 
-1. **Get your APIM gateway URL:**
-   ```bash
-   az apim show --name your-apim --resource-group rg-ai --query gatewayUrl -o tsv
-   ```
-
-2. **Get your Foundry project ID:**
-   ```bash
-   az ml workspace show --name your-foundry --resource-group rg-ai --query id -o tsv
-   ```
-
-3. **Deploy a model** (if not already done):
-   - Go to [Azure AI Foundry Portal](https://ai.azure.com)
-   - Navigate to your project
-   - Go to **Models + endpoints** → **Deploy model**
-   - Choose `gpt-4o` (or your preferred model)
-   - Note the deployment name
-
-4. **Configure APIM backend** (see [setup-apim-gateway.md](../docs/playbooks/setup-apim-gateway.md))
+```bash
+az apim show --name <apim-name> --resource-group <rg> --query gatewayUrl -o tsv
+```
 
 ## 🔐 Security Configuration
 
-### 1. Disable Public Access on Foundry
+Security is enforced at three layers, all configured by `azd provision` via Bicep — **no manual steps are required**:
 
-**This is CRITICAL** to ensure all traffic goes through APIM:
+### 1. Public Access Disabled on Foundry (Network Layer)
 
-```bash
-az ml workspace update \
-  --name ai-hub-project \
-  --resource-group rg-ai \
-  --public-network-access Disabled
-```
+Both Foundry accounts have `publicNetworkAccess: 'Disabled'` in `infrastructure/bicep/foundry-hub-project.bicep`. All SDK traffic must transit the APIM private endpoint — there is no path to bypass APIM regardless of SDK behavior.
 
-Or update your Bicep (already done in this repo):
-```bicep
-publicNetworkAccess: 'Disabled'
-```
+### 2. APIM Managed Identity → Foundry RBAC (Identity Layer)
 
-### 2. Grant RBAC to APIM Only
+The APIM system-assigned MSI is granted `Cognitive Services User` on both Foundry accounts in `infrastructure/bicep/foundry-apim-rbac.bicep`. No API keys are used or distributed.
 
-APIM needs access, but your apps should NOT have direct access:
+### 3. Private Endpoints + DNS (Network Isolation)
+
+APIM reaches Foundry exclusively via private endpoints declared in `infrastructure/bicep/networking.bicep`. Private DNS zones are linked to the VNet for name resolution.
+
+To verify the configuration after provisioning:
 
 ```bash
-# Get APIM managed identity
-APIM_IDENTITY=$(az apim show \
-  --name your-company-ai \
-  --resource-group rg-ai \
-  --query identity.principalId -o tsv)
-
-# Grant Azure AI Developer role to APIM
-az role assignment create \
-  --assignee $APIM_IDENTITY \
-  --role "Azure AI Developer" \
-  --scope $(az ml workspace show --name ai-hub-project --resource-group rg-ai --query id -o tsv)
-```
-
-### 3. Configure Private Endpoint
-
-APIM needs to reach Foundry after disabling public access:
-
-```bash
-# Create private endpoint from APIM subnet to Foundry
-az network private-endpoint create \
-  --name pe-foundry \
-  --resource-group rg-ai \
-  --vnet-name vnet-apim \
-  --subnet snet-apim \
-  --private-connection-resource-id $(az ml workspace show --name ai-hub-project --resource-group rg-ai --query id -o tsv) \
-  --group-id workspace \
-  --connection-name foundry-connection
+# Check public access is disabled
+az cognitiveservices account show \
+  --name <foundry-account-name> --resource-group <rg> \
+  --query properties.publicNetworkAccess
+# Expected: "Disabled"
 ```
 
 ## ⚠️ CRITICAL: SDK Endpoint Verification
@@ -265,7 +217,7 @@ az network private-endpoint create \
 However, **this is unverified**. If the SDK constructs Azure-specific URLs internally, some operations might 
 bypass APIM.
 
-**📖 Read this FIRST:** [SDK-ENDPOINT-VERIFICATION.md](../docs/SDK-ENDPOINT-VERIFICATION.md)
+**📖 Read this FIRST:** [sdk-endpoint-verification.md](../docs/reference/sdk-endpoint-verification.md)
 
 **Before deploying to production:**
 1. Run traffic capture test: `tests/test-sdk-endpoint-routing.py`

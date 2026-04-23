@@ -30,12 +30,18 @@ In the policy XML, update these values:
 <set-variable name="secondaryBackend" value="https://YOUR-OPENAI-WESTUS.openai.azure.com" />
 ```
 
-### Step 2: Apply to AI-Premium Product
+### Step 2: Apply via Infrastructure as Code
 
-1. Azure Portal → API Management → Products → AI-Premium
-2. Settings → Policies → Edit
-3. Paste `circuit-breaker-multi-region.xml` content
-4. Save
+The circuit breaker policy is referenced in `infrastructure/bicep/apim-gateway.bicep` and applied automatically. To update the policy:
+
+1. Edit `policies/apim/circuit-breaker-multi-region.xml` with your backend endpoint values
+2. Run `azd provision` to push the updated policy to Azure
+
+```powershell
+azd provision --no-prompt
+```
+
+> Do **not** apply policy changes through the Azure Portal — they will be overwritten on the next `azd provision`.
 
 ### Step 3: Verify Configuration
 
@@ -165,13 +171,13 @@ To retry faster:
 
 ### Issue: High latency spikes during failover
 **Cause**: Cold start on secondary region  
-**Solution**: Enable "always on" for both regions, use Standard tier
+**Solution**: Enable pre-warming on secondary region (configure in `infrastructure/bicep/apim-gateway.bicep`)
 
 ## Production Checklist
 
 - [ ] Secondary OpenAI resource deployed
 - [ ] Same models available in both regions
-- [ ] API keys configured as APIM Named Values
+- [ ] APIM MSI granted `Cognitive Services User` on both Foundry accounts (see `foundry-apim-rbac.bicep`)
 - [ ] Policy applied to AI-Premium product
 - [ ] Grafana dashboard configured
 - [ ] Alerts set up for high failover rate (>10%)

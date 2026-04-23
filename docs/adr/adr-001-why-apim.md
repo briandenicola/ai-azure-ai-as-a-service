@@ -55,12 +55,12 @@ APIM sits between developers and models, providing:
 
 1. **Added Latency** - ~5-10ms per request (acceptable for AI workloads)
 2. **Operational Complexity** - Another service to configure & monitor
-3. **Cost** - APIM consumption unit costs (~$4 per million calls on Standard tier)
+3. **Cost** - APIM Premium tier pricing (~$4,000+/month for two units in two regions)
 4. **Learning Curve** - Teams need to understand APIM policies
 
 ## Implementation
 
-1. Deploy APIM in Standard or Premium tier
+1. Deploy APIM in Premium tier (required for VNet injection and multi-region support)
 2. Create three products: `/ai/inference`, `/ai/agents`, `/ai/completions`
 3. Configure rate limiting policies (tokens per day per team)
 4. Set up semantic caching for model endpoints
@@ -71,9 +71,9 @@ APIM sits between developers and models, providing:
 
 | Item | Cost/Month |
 |------|-----------|
-| APIM Standard | $400 |
-| Consumption units (~1M requests) | $100 |
-| **Total** | **~$500** |
+| APIM Premium (2 units × 2 regions) | ~$4,000 |
+| Log Analytics (395-day retention) | ~$200 |
+| **Total** | **~$4,200** |
 
 *Offset by: semantic caching saving ~30-40% of token costs, eliminating waste from uncontrolled usage*
 

@@ -10,7 +10,7 @@ This is a COMPLETE reference implementation showing how to:
 5. Invoke the agent and handle streaming responses
 
 WHY APIM:
-- Enforces token quotas (e.g., 100K TPM per department)
+- Enforces token quotas (Bronze: 500, Silver: 5,000, Gold: 5,500 TPM by tier)
 - Applies semantic caching (faster + cheaper)
 - Circuit breaker for multi-region failover
 - Audit logging for compliance
@@ -222,7 +222,7 @@ class FoundryAgentManager:
         # some operations might bypass APIM, circumventing quotas/policies.
         #
         # Mitigation: Use publicNetworkAccess: Disabled on Foundry + Private Link
-        # See: docs/SDK-ENDPOINT-VERIFICATION.md
+        # See: docs/reference/sdk-endpoint-verification.md
         self.client = AIProjectClient(
             credential=self.credential,
             project_id=config.project_id,

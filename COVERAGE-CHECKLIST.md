@@ -9,12 +9,13 @@
 | Topic | Location | Status |
 |-------|----------|--------|
 | Cost control & quota management per LOB | `docs/adr/adr-001-why-apim.md` | ✅ |
+| Holistic quota management (both layers) | `docs/playbooks/quota-management.md` | ✅ |
 | Token-based rate limiting | `policies/apim/token-quota-by-department.xml` | ✅ |
 | Semantic caching to reduce costs | `policies/apim/semantic-caching.xml` | ✅ |
-| High availability & failover | `docs/playbooks/setup-apim-gateway.md` (Step 5) | ✅ |
-| Circuit breaker patterns | `policies/apim/token-quota-by-department.xml` | ✅ |
+| High availability & failover | `docs/playbooks/setup-apim-gateway.md` | ✅ |
+| Circuit breaker patterns | `policies/apim/circuit-breaker-multi-region.xml` | ✅ |
 | Managed Identity auth (no API keys) | `examples/python/1-simple-chat-via-apim.py` | ✅ |
-| Centralized audit logging | `docs/playbooks/setup-apim-gateway.md` (Step 2: Logger) | ✅ |
+| Centralized audit logging | `docs/playbooks/setup-apim-gateway.md` | ✅ |
 | Application Insights integration | `docs/playbooks/setup-apim-gateway.md` | ✅ |
 | APIM subscription key per LOB | `docs/developer-quickstart.md` | ✅ |
 
@@ -25,7 +26,7 @@
 | Topic | Location | Status |
 |-------|----------|--------|
 | Foundry as central hub | `docs/adr/adr-002-foundry-integration.md` | ✅ |
-| Hub project model | `infrastructure/bicep/foundry-hub-project.bicep` | ✅ |
+| Shared Foundry instance model | `infrastructure/bicep/foundry-hub-project.bicep` | ✅ |
 | Inference gateway (/ai/inference) | `docs/developer-quickstart.md` | ✅ |
 | Agent service proxy (/ai/agents) | `docs/developer-quickstart.md` (Pattern B & C) | ✅ |
 | Tools API integration | `examples/python/2-agent-with-tools.py` | ✅ |
@@ -86,7 +87,7 @@
 
 | Topic | Location | Status |
 |-------|----------|--------|
-| Unique subscription key per LOB | `docs/playbooks/setup-apim-gateway.md` (Step 6-7) | ✅ |
+| Unique subscription key per LOB | `docs/playbooks/setup-apim-gateway.md` | ✅ |
 | Subscription key rotation | `docs/playbooks/setup-apim-gateway.md` | ✅ |
 | Key storage in shared Key Vault | `docs/developer-workflow-30days.md` | ✅ |
 
@@ -166,6 +167,8 @@
 | Semantic caching policy | `policies/apim/semantic-caching.xml` | ✅ |
 | Auth header validation | `policies/apim/auth-header-validation.xml` | ✅ |
 | Circuit breaker for failover | `policies/apim/circuit-breaker-multi-region.xml` | ✅ |
+| Circuit breaker deployment guide | `policies/apim/circuit-breaker-guide.md` | ✅ |
+| Mock responses for load testing | `policies/apim/mock-responses.md` | ✅ |
 | Request/response transformation | `policies/apim/token-quota-by-department.xml` | ✅ |
 | Logging to Event Hub | `policies/apim/token-quota-by-department.xml` | ✅ |
 
@@ -181,7 +184,7 @@
 | Azure OpenAI backend config | `infrastructure/bicep/apim-gateway.bicep` | ✅ |
 | Logger to App Insights | `infrastructure/bicep/apim-gateway.bicep` | ✅ |
 | API products creation | `infrastructure/bicep/apim-gateway.bicep` | ✅ |
-| Foundry Hub Project | `infrastructure/bicep/foundry-hub-project.bicep` | ✅ |
+| Foundry AIServices instance | `infrastructure/bicep/foundry-hub-project.bicep` | ✅ |
 | App Insights linkage | `infrastructure/bicep/foundry-hub-project.bicep` | ✅ |
 | AI Search for RAG | `infrastructure/bicep/foundry-hub-project.bicep` | ✅ |
 | Developer RBAC assignment | `infrastructure/bicep/foundry-hub-project.bicep` | ✅ |
@@ -205,6 +208,8 @@
 | Why APIM | `docs/adr/adr-001-why-apim.md` | ✅ |
 | Foundry integration pattern | `docs/adr/adr-002-foundry-integration.md` | ✅ |
 | ServiceNow governance | `docs/adr/adr-003-servicenow-workflow.md` | ✅ |
+| PCI DSS compliance decisions | `docs/adr/adr-004-pci-dss-compliance.md` | ✅ |
+| Identity security gaps — CAF review | `docs/adr/adr-005-identity-security-gaps.md` | ✅ |
 
 ### Developer Guides
 
@@ -216,6 +221,14 @@
 | Day 4-7: Build first agent | `docs/developer-workflow-30days.md` | ✅ |
 | Day 8-14: Move to production | `docs/developer-workflow-30days.md` | ✅ |
 | Day 15-30: Optimization & monitoring | `docs/developer-workflow-30days.md` | ✅ |
+
+### Reference
+
+| Topic | Location | Status |
+|-------|----------|--------|
+| SDK endpoint FAQ | `docs/reference/sdk-endpoint-questions.md` | ✅ |
+| SDK endpoint risk analysis | `docs/reference/sdk-endpoint-verification.md` | ✅ |
+| SDK source code review guide | `docs/reference/sdk-source-code-investigation.md` | ✅ |
 
 ### Playbooks (IT Manager)
 
@@ -363,6 +376,45 @@ All 11 previously identified gaps have been filled:
 | - [ ] Annual re-approval of `ai-pci-payment` product subscriptions | Req 12.3.2 | ⬜ Customer action |
 | - [ ] Scope and assess the **caller application's CDE** separately | Req 12.5.2 | ⬜ Customer action |
 | - [ ] Log Analytics / storage **immutable log retention** (prevent tampering) | Req 10.3.2 | ⬜ Customer action |
+
+---
+
+## 🔍 CAF Security Review — Identity Gaps (April 2026)
+
+> Review trigger: Microsoft Azure Architecture Center — AI gateway custom authentication guide  
+> Full findings: [ADR-005](docs/adr/adr-005-identity-security-gaps.md)
+
+### Gap Assessment
+
+| Gap | Description | Severity | Status |
+|-----|-------------|----------|--------|
+| 1 — APIM MSI auth | Gateway uses managed identity to call Foundry; `disableLocalAuth: true` set | ✅ Compliant | No action |
+| 2 — Identity logging | Subscription ID + JWT appid + user OID + IP logged per call | ✅ Compliant | No action |
+| 3 — Per-LOB Foundry routing | Single shared Foundry instance (Option A); data isolation via APIM subscription key boundaries | ⚠️ Accepted tradeoff | Revisit at Gold LOB GA |
+| 4 — Semantic cache identity scope | Cache key was prompt-hash-only; allows cross-LOB cache leakage | 🔴 Security | **Fixed** |
+| 5 — Entra Agent ID inventory | No agent catalog; rogue agent creation not audited | 🟡 Governance | Open |
+
+### Fixed: Semantic Cache Cross-LOB Leakage (Gap 4)
+
+| Item | File | Status |
+|------|------|--------|
+| Cache key now prefixed with `context.Subscription.Id` before hashing | `policies/apim/semantic-caching.xml` | ✅ Fixed |
+| Reasoning and alternative scoping strategies documented | `docs/adr/adr-005-identity-security-gaps.md` §Gap 4 | ✅ |
+| PCI DSS caching prohibition already in place (unchanged) | `policies/apim/pci-dss-cardholder-data-protection.xml` | ✅ |
+
+### Open: Entra Agent ID Inventory (Gap 5)
+
+| Item | Owner | Target |
+|------|-------|--------|
+| Enable Entra Agent ID in Foundry project settings | IAM team | Gold tier GA |
+| Conditional Access policy — agent registration requires Security approval (Gold) | IAM team | Gold tier GA |
+| Monthly agent inventory export to Log Analytics (PCI DSS Req 12) | Platform Engineering | Gold tier GA |
+
+### Architecture Decision Records
+
+| ADR | File | Status |
+|-----|------|--------|
+| ADR-005: Identity security gaps — CAF review findings | `docs/adr/adr-005-identity-security-gaps.md` | ✅ |
 
 ---
 

@@ -150,7 +150,7 @@ Developers request access through ServiceNow and receive a single APIM subscript
 |---|---|---|---|---|---|
 | **Bronze** | gpt-4o-mini, Phi-4 | 500 | 60 | Self-service | Dev/test, low-volume apps |
 | **Silver** | gpt-4o, gpt-4o-mini, Phi-4, Llama-3 + Agents API | 5,000 | 300 | Self-service | Production workloads |
-| **Gold** | All models + Agents API (PCI DSS scope eligible) | 200,000 | Unlimited | Requires approval | High-volume / PCI workloads |
+| **Gold** | All models + Agents API (PCI DSS scope eligible) | 5,500 | 330 | Requires approval | High-volume / PCI workloads |
 
 > **TPM** = Tokens Per Minute estimated at request time (prompt + completion).  
 > **RPM** = Requests Per Minute enforced per subscription key.
@@ -159,19 +159,19 @@ Developers request access through ServiceNow and receive a single APIM subscript
 xychart-beta
     title "Per-subscription Token throughput (TPM)"
     x-axis ["Bronze", "Silver", "Gold"]
-    y-axis "Tokens per Minute" 0 --> 200000
-    bar [500, 5000, 200000]
+    y-axis "Tokens per Minute" 0 --> 6000
+    bar [500, 5000, 5500]
 ```
 
 ```mermaid
 xychart-beta
     title "Per-subscription Request throughput (RPM)"
-    x-axis ["Bronze", "Silver"]
-    y-axis "Requests per Minute" 0 --> 300
-    bar [60, 300]
+    x-axis ["Bronze", "Silver", "Gold"]
+    y-axis "Requests per Minute" 0 --> 350
+    bar [60, 300, 330]
 ```
 
-> Gold has no RPM cap. All tiers include multi-region circuit-breaker failover (East US → West US).
+> All tiers include multi-region circuit-breaker failover (East US → West US). Gold requires manual approval and is limited to one subscription per customer (PCI DSS Req 7).
 
 ### API Surfaces
 
@@ -277,6 +277,8 @@ policies/
     circuit-breaker-multi-region.xml
     pci-dss-cardholder-data-protection.xml
     pci-dss-audit-logging.xml
+    circuit-breaker-guide.md          Circuit breaker deployment guide
+    mock-responses.md                 APIM mock responses for load testing
 
 observability/
   grafana/dashboards/
@@ -293,6 +295,9 @@ docs/
   adr/                             Architecture Decision Records (why APIM, Foundry, etc.)
   playbooks/                       Step-by-step operator guides
   reference/
+    sdk-endpoint-questions.md        SDK endpoint FAQ and answers
+    sdk-endpoint-verification.md     SDK endpoint risk analysis
+    sdk-source-code-investigation.md SDK source code review guide
 
 scripts/
   entra-id/                        Group and project provisioning scripts

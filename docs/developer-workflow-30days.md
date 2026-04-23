@@ -452,6 +452,7 @@ client = AIProjectClient(
 - **Code Examples:** [Python](../examples/python/), [C#](../examples/csharp/)
 - **Troubleshooting:** [#ai-platform Slack channel](slack://channel/)
 - **Architecture:** [Architecture Decision Records](../adr/)
+- **SDK Endpoint Reference:** [SDK Endpoint FAQ](reference/sdk-endpoint-questions.md) · [Endpoint Verification](reference/sdk-endpoint-verification.md)
 - **Glossary:** See below
 
 ---

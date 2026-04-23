@@ -104,7 +104,7 @@ class AgentsClient:
         self._url = self._build_url(project_id)
 ```
 
-**See detailed investigation guide:** [SDK-SOURCE-CODE-INVESTIGATION.md](SDK-SOURCE-CODE-INVESTIGATION.md)
+**See detailed investigation guide:** [sdk-source-code-investigation.md](./sdk-source-code-investigation.md)
 
 ---
 
@@ -219,25 +219,21 @@ This test patches HTTP libraries to capture all outgoing requests.
 
 ### 3. Review SDK Source Code
 
-Follow: [SDK-SOURCE-CODE-INVESTIGATION.md](SDK-SOURCE-CODE-INVESTIGATION.md)
+Follow: [sdk-source-code-investigation.md](./sdk-source-code-investigation.md)
 
-### 4. Deploy Network Enforcement
+### 4. Network Enforcement (Already Applied)
+
+Both Foundry accounts have `publicNetworkAccess: 'Disabled'` configured in `infrastructure/bicep/foundry-hub-project.bicep` and are reachable only via private endpoints. This is the strongest mitigation — SDK requests that bypass the APIM endpoint parameter will be blocked at the network layer regardless.
+
+To verify the current state:
 
 ```bash
-# Ensure Foundry has public access disabled
-az ml workspace update \
-  --name ai-hub-project \
-  --public-network-access Disabled
-
-# Create private endpoint from APIM to Foundry
-az network private-endpoint create \
-  --name pe-foundry \
-  --resource-group rg-ai \
-  --vnet-name vnet-apim \
-  --subnet snet-apim \
-  --private-connection-resource-id $(az ml workspace show --name ai-hub-project --query id -o tsv) \
-  --group-id workspace \
-  --connection-name foundry-connection
+az cognitiveservices account show \
+  --name <foundry-account-name> \
+  --resource-group <rg> \
+  --query properties.publicNetworkAccess
+# Expected: "Disabled"
+```
 ```
 
 ### 5. Open Microsoft Support Ticket
@@ -315,31 +311,29 @@ Please provide:
 
 ## Key Takeaway
 
-**Your architecture's success depends on an UNVERIFIED assumption:**
-> "Setting endpoint on AIProjectClient routes ALL operations through that endpoint"
+**The original concern was whether `AIProjectClient` honors the `endpoint` parameter for all operations.**
 
-**This might be true, but you MUST verify it.**
+This is now a non-issue: both Foundry accounts have `publicNetworkAccess: 'Disabled'`, meaning SDK requests that construct Azure-internal URLs are blocked at the network layer regardless of SDK behavior. The APIM private endpoint is the only path to Foundry.
 
-**Your Bicep has a critical safety net:**
+**Your Bicep has the critical safety net:**
 ```bicep
 publicNetworkAccess: 'Disabled'
 ```
 
-**This means even if the SDK tries to bypass, the network blocks it.**  
-**Keep this configuration!**
+**Even if the SDK tried to bypass, the network blocks it. Keep this configuration.**
 
 ---
 
 ## Files Created for You
 
 1. **tests/test-sdk-endpoint-routing.py** - HTTP capture test
-2. **docs/SDK-ENDPOINT-VERIFICATION.md** - Complete risk analysis
-3. **docs/SDK-SOURCE-CODE-INVESTIGATION.md** - Source code review guide
+2. **docs/reference/sdk-endpoint-verification.md** - Complete risk analysis
+3. **docs/reference/sdk-source-code-investigation.md** - Source code review guide
 4. **This file** - Direct answers to your questions
 
 ## Next Steps
 
-1. Read [SDK-ENDPOINT-VERIFICATION.md](SDK-ENDPOINT-VERIFICATION.md) for full analysis
+1. Read [sdk-endpoint-verification.md](./sdk-endpoint-verification.md) for full analysis
 2. Run the traffic capture test
 3. Review SDK source code
 4. Open Microsoft support ticket

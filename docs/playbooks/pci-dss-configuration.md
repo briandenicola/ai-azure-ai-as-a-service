@@ -30,21 +30,26 @@ to satisfy PCI DSS v4.0 requirements for workloads involving credit card data.
 | WAF | Application Gateway WAF v2 **or** Azure Front Door WAF in front of APIM |
 | Entra ID tenant | Conditional Access policies with MFA enabled for all admin identities |
 
+> **⚠️ IaC-only policy:** All Azure resources in this platform are declared in
+> `infrastructure/bicep/` and deployed via `azd provision`. **Do not make one-off
+> changes through the Azure Portal or raw `az` mutation commands.** Any out-of-band
+> change will be overwritten on the next `azd provision`. The steps below describe
+> the configuration that Bicep declares; run `azd provision` to apply it.
+
 ---
 
 ## Step 1 — Upgrade APIM to Premium SKU
 
 > Standard SKU does not support VNet injection (PCI DSS Req 1.3). Premium is mandatory.
 
-```bash
-# Upgrade existing Standard instance to Premium
-az apim update \
-  --name <your-apim-name> \
-  --resource-group <rg-name> \
-  --sku-name Premium \
-  --sku-capacity 2
+The APIM SKU is declared in `infrastructure/bicep/apim-gateway.bicep`
+(`sku: { name: 'Premium', capacity: 2 }`). Ensure this is set before provisioning:
 
-# Verify
+```bash
+# Apply the Bicep configuration (includes SKU + zone redundancy)
+azd provision
+
+# Verify the deployed SKU
 az apim show --name <your-apim-name> --resource-group <rg-name> \
   --query "sku.name" --output tsv
 # Expected output: Premium
@@ -55,27 +60,31 @@ az apim show --name <your-apim-name> --resource-group <rg-name> \
 
 ---
 
-## Step 2 — Provision Key Vault HSM and CMK (PCI DSS Req 3.7)
+## Step 2 — Provision Key Vault and CMK (PCI DSS Req 3.7)
+
+Key Vault with purge protection and soft-delete is declared in
+`infrastructure/bicep/supporting-infra.bicep`. The default SKU is **Standard**;
+for full HSM-backed key storage in production, change `sku.name` from `'standard'`
+to `'premium'` in `supporting-infra.bicep` before provisioning. The APIM managed
+identity RBAC assignment (Key Vault Crypto User) is in
+`infrastructure/bicep/foundry-apim-rbac.bicep`.
 
 ```bash
-# Create Key Vault with HSM (Premium tier)
-az keyvault create \
-  --name <kv-name> \
-  --resource-group <rg-name> \
-  --location <location> \
-  --sku premium \
-  --enable-purge-protection true \
-  --enable-soft-delete true \
-  --retention-days 90
+# Apply the Bicep configuration (creates/updates Key Vault, RBAC, and the CMK key)
+azd provision
 
-# Create RSA 2048 key for APIM encryption
-az keyvault key create \
-  --vault-name <kv-name> \
-  --name apim-encryption-key \
-  --kty RSA-HSM \
-  --size 2048 \
-  --ops encrypt decrypt wrapKey unwrapKey
+# Verify Key Vault was created with purge protection
+az keyvault show --name <kv-name> --resource-group <rg-name> \
+  --query "{sku:properties.sku.name, purgeProtection:properties.enablePurgeProtection}" \
+  --output json
+# Expected (default): {"sku": "standard", "purgeProtection": true}
+# For PCI production with HSM: set sku.name='premium' in supporting-infra.bicep before azd provision
+```
 
+After provisioning, set the 90-day rotation policy on the CMK (Key Vault data-plane
+operation not covered by Bicep — run once after first provision):
+
+```bash
 # Set rotation policy — rotate every 90 days (PCI DSS Req 3.7.1)
 az keyvault key rotation-policy update \
   --vault-name <kv-name> \
@@ -87,40 +96,24 @@ az keyvault key rotation-policy update \
     }],
     "attributes": { "expiryTime": "P180D" }
   }'
-
-# Grant APIM managed identity access to the key
-APIM_PRINCIPAL=$(az apim show --name <your-apim-name> --resource-group <rg-name> \
-  --query "identity.principalId" --output tsv)
-
-az keyvault set-policy \
-  --name <kv-name> \
-  --object-id "$APIM_PRINCIPAL" \
-  --key-permissions get wrapKey unwrapKey
 ```
 
 ---
 
 ## Step 3 — Enable VNet Internal Mode (PCI DSS Req 1.3)
 
-Deploy or update APIM using the updated Bicep template
-(`infrastructure/bicep/apim-gateway.bicep`) which includes VNet parameters:
+VNet internal mode is declared in `infrastructure/bicep/apim-gateway.bicep` and
+`infrastructure/bicep/networking.bicep`. Foundry access uses system-assigned
+managed identity — **no API keys are stored or passed as parameters**.
 
 ```bash
-az deployment group create \
-  --resource-group <rg-name> \
-  --template-file infrastructure/bicep/apim-gateway.bicep \
-  --parameters \
-    apimName=<your-apim-name> \
-    openaiResourceName=<openai-name> \
-    openaiApiKey=<key> \
-    foundryProjectId=<project-id> \
-    appInsightsName=<appinsights-name> \
-    keyVaultName=<kv-name> \
-    logAnalyticsWorkspaceId=<law-resource-id> \
-    vnetResourceId=<vnet-resource-id> \
-    apimSubnetName=snet-apim \
-    apimCapacity=2 \
-    availabilityZones='["1","2","3"]'
+# Set parameters in .azure/<env-name>/.env or azure.yaml, then:
+azd provision
+
+# Confirm internal VNet mode is active
+az apim show --name <your-apim-name> --resource-group <rg-name> \
+  --query "virtualNetworkType" --output tsv
+# Expected output: Internal
 ```
 
 After VNet injection, the APIM gateway URL resolves only from within the VNet.
@@ -128,63 +121,49 @@ Update your WAF backend pool to use the internal IP address of APIM.
 
 ### Required NSG on the APIM subnet
 
+The NSG for the APIM subnet is declared in `infrastructure/bicep/networking.bicep`
+(`resource apimNsg`). It includes the four required inbound rules:
+- **Allow-APIM-Management** (port 3443, source: `ApiManagement`) — required for APIM health probes
+- **Allow-WAF-to-APIM** (port 443, source: WAF subnet CIDR) — only WAF traffic reaches APIM
+- **Allow-AzureLB** (any port, source: `AzureLoadBalancer`)
+- **Deny-All-Inbound** (priority 4096) — blocks all other inbound traffic
+
+To update NSG rules, edit `infrastructure/bicep/networking.bicep` and run:
+
 ```bash
-# Get the APIM subnet NSG name
-NSG=<nsg-name>
-RG=<rg-name>
+azd provision
 
-# Allow APIM management traffic (Azure Portal, ARM) — REQUIRED for APIM health
-az network nsg rule create --nsg-name $NSG --resource-group $RG \
-  --name Allow-APIM-Management \
-  --priority 110 --direction Inbound --access Allow \
-  --protocol Tcp --destination-port-ranges 3443 \
-  --source-address-prefixes ApiManagement --destination-address-prefixes VirtualNetwork
-
-# Allow gateway traffic from WAF subnet only
-az network nsg rule create --nsg-name $NSG --resource-group $RG \
-  --name Allow-WAF-to-APIM \
-  --priority 100 --direction Inbound --access Allow \
-  --protocol Tcp --destination-port-ranges 443 \
-  --source-address-prefixes <waf-subnet-cidr> --destination-address-prefixes VirtualNetwork
-
-# Allow Azure Load Balancer
-az network nsg rule create --nsg-name $NSG --resource-group $RG \
-  --name Allow-AzureLB \
-  --priority 200 --direction Inbound --access Allow \
-  --protocol '*' --destination-port-ranges '*' \
-  --source-address-prefixes AzureLoadBalancer --destination-address-prefixes VirtualNetwork
-
-# Deny everything else inbound
-az network nsg rule create --nsg-name $NSG --resource-group $RG \
-  --name Deny-All-Inbound \
-  --priority 4096 --direction Inbound --access Deny \
-  --protocol '*' --destination-port-ranges '*' \
-  --source-address-prefixes '*' --destination-address-prefixes '*'
+# Verify the NSG is associated with the APIM subnet
+az network vnet subnet show \
+  --resource-group <rg-name> \
+  --vnet-name <vnet-name> \
+  --name snet-apim \
+  --query "networkSecurityGroup.id" --output tsv
 ```
 
 ---
 
 ## Step 4 — Apply PCI DSS Policies to the PCI-Scoped Product
 
-In the Azure Portal or via ARM/Bicep, apply policies at the **product** level
-for the `ai-pci-payment` product.
+Apply policies at the **product** level for the `ai-pci-payment` product via
+Bicep. Add the `ai-pci-payment` product and its policy reference to
+`infrastructure/bicep/apim-gateway.bicep` (following the same pattern as
+`bronzeProductPolicy` / `silverProductPolicy`), then run `azd provision`.
 
 > Policy application order matters. Apply in this sequence:
 
-### 4a. Upload the policy files
+### 4a. Deploy the policy via Bicep
+
+In `infrastructure/bicep/apim-gateway.bicep`, add a product policy resource
+referencing `policies/apim/pci-dss-cardholder-data-protection.xml` for the
+`ai-pci-payment` product, then:
 
 ```bash
-# Apply PCI DSS CHD protection policy at product scope
-az apim product policy create \
-  --resource-group <rg-name> \
-  --service-name <your-apim-name> \
-  --product-id ai-pci-payment \
-  --policy-path policies/apim/pci-dss-cardholder-data-protection.xml \
-  --xml-escaped false
-
-# The audit logging policy chains inside operations on PCI-scoped APIs.
-# Apply it at each operation level or at the API level within the product.
+azd provision
 ```
+
+The audit logging policy (`pci-dss-audit-logging.xml`) chains inside operations
+on PCI-scoped APIs — apply it at the API level within the product.
 
 ### 4b. Verify policy is active
 
@@ -197,8 +176,20 @@ az apim product policy show \
 
 ### 4c. Confirm semantic caching is NOT on PCI operations
 
-Open each API operation in the PCI product in Azure Portal → API → Operation → Policy Editor.
-Verify `semantic-caching.xml` content (`<cache-lookup-value>`, `<cache-store-value>`) is **absent**.
+Inspect the effective policy for any operation in the PCI product via the CLI:
+
+```bash
+# Show the effective policy for the ai-pci-payment product
+az apim product policy show \
+  --resource-group <rg-name> \
+  --service-name <your-apim-name> \
+  --product-id ai-pci-payment
+```
+
+Verify the output does **not** contain `semantic-caching.xml` directives
+(`<cache-lookup-value>`, `<cache-store-value>`). If it does, remove the semantic
+caching policy reference from the `ai-pci-payment` product in
+`infrastructure/bicep/apim-gateway.bicep` and run `azd provision`.
 
 Also verify `token-quota-by-department.xml` does **not** log request bodies for PCI operations
 (the `log-to-eventhub` expression must not include `requestBody`).
@@ -207,26 +198,27 @@ Also verify `token-quota-by-department.xml` does **not** log request bodies for 
 
 ## Step 5 — Configure Log Analytics Workspace for PCI Audit Retention (Req 10.5.1)
 
+Log Analytics retention is declared in `infrastructure/bicep/supporting-infra.bicep`
+(`retentionInDays: 395`). This is already set to 395 days. To verify or change:
+
+1. Open `infrastructure/bicep/supporting-infra.bicep`
+2. Confirm `retentionInDays: 395`
+3. Run `azd provision` to apply
+
 ```bash
-LAW_ID=<log-analytics-workspace-id>
-LAW_NAME=<law-name>
-LAW_RG=<law-rg>
-
-# Set retention to 395 days (13 months) for PCI DSS Req 10.5.1
-az monitor log-analytics workspace update \
-  --resource-group $LAW_RG \
-  --workspace-name $LAW_NAME \
-  --retention-time 395
-
-# Enable immutable storage on the workspace to prevent log tampering (Req 10.3.2)
-# Note: Immutability is configured in the storage account linked to the workspace
-az storage account blob-service-properties update \
-  --account-name <storage-linked-to-law> \
-  --resource-group $LAW_RG \
-  --enable-versioning true \
-  --enable-delete-retention true \
-  --delete-retention-days 395
+# Verify retention after provisioning
+az monitor log-analytics workspace show \
+  --resource-group <rg-name> \
+  --workspace-name <law-name> \
+  --query "retentionInDays" --output tsv
+# Expected: 395
 ```
+
+> **Req 10.3.2 — Log tamper protection:** Configure immutability on the storage
+> account linked to Log Analytics through the Azure Storage Bicep resource
+> (`blobServiceProperties.isVersioningEnabled: true`,
+> `deleteRetentionPolicy.days: 395`). Add this to `supporting-infra.bicep` and
+> run `azd provision`.
 
 ---
 
@@ -279,27 +271,20 @@ AzureDiagnostics
 
 ## Step 7 — WAF Configuration (PCI DSS Req 6.4 / 6.5)
 
-Deploy Application Gateway WAF v2 or Azure Front Door WAF **in front of APIM**.
+Application Gateway WAF v2 with OWASP CRS 3.2 in Prevention mode is declared in
+`infrastructure/bicep/waf-appgw.bicep` (`resource wafPolicy` with
+`mode: 'Prevention'`, `ruleSetType: 'OWASP'`, `ruleSetVersion: '3.2'`).
 
 ```bash
-# Application Gateway WAF v2 with OWASP CRS 3.2 — Prevention mode required for PCI
-az network application-gateway waf-policy create \
-  --name pci-waf-policy \
-  --resource-group <rg-name> \
-  --location <location>
+# Deploy WAF with the rest of the infrastructure
+azd provision
 
-az network application-gateway waf-policy managed-rules rule-set add \
-  --policy-name pci-waf-policy \
+# Verify WAF mode is Prevention (not Detection)
+az network application-gateway waf-policy show \
+  --name <waf-policy-name> \
   --resource-group <rg-name> \
-  --type OWASP \
-  --version 3.2
-
-# Switch WAF to Prevention mode (Detection mode is NOT sufficient for PCI DSS)
-az network application-gateway waf-policy update \
-  --name pci-waf-policy \
-  --resource-group <rg-name> \
-  --set "policySettings.mode=Prevention" \
-  --set "policySettings.state=Enabled"
+  --query "policySettings.mode" --output tsv
+# Expected: Prevention
 ```
 
 > **Custom WAF rules for AI payloads:**  

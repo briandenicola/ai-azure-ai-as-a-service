@@ -101,7 +101,7 @@ $GOLD_KEY     = Invoke-ApimListSecrets 'Investment-Platform'
 Write-Host "  Bronze key (Branch Advisor):        $($BRONZE_KEY.Substring(0,8))... (60 RPM — sustained only)" -ForegroundColor Green
 Write-Host "  Silver key (AML Screening):         $($SILVER_KEY.Substring(0,8))... (300 RPM — blast safe)" -ForegroundColor Green
 Write-Host "  Silver key 2 (Credit Underwriting): $($SILVER_KEY_2.Substring(0,8))... (300 RPM — blast safe)" -ForegroundColor Green
-Write-Host "  Gold key (Investment Platform):     $($GOLD_KEY.Substring(0,8))... (unlimited RPM — Gold tier)" -ForegroundColor Green
+Write-Host "  Gold key (Investment Platform):     $($GOLD_KEY.Substring(0,8))... (5,500 TPM / 330 RPM — Gold tier)" -ForegroundColor Green
 
 # ── Step 3: Create / update ALT test definition ─────────────────────────────────
 Write-Host ""

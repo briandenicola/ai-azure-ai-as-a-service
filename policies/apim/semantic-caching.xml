@@ -7,13 +7,34 @@ This policy uses vector similarity to detect when a new prompt is similar to a c
 
 How it works:
 1. Hash the incoming prompt
-2. Check if a similar prompt exists in cache
+2. Check if a similar prompt exists in cache (scoped to this subscription)
 3. If yes, return cached response (cost savings!)
 4. If no, call model and cache response
 
 Expected savings: 20-40% reduction in token consumption for repetitive queries
 
 Applied to: /ai/completions endpoint only (not tool calls)
+
+SECURITY NOTE (CAF Review — April 2026):
+  Cache keys MUST include the caller's subscription ID (context.Subscription.Id)
+  to prevent cross-LOB cache poisoning.  Without this scope, a cached response
+  generated for one LOB's confidential prompt could be returned to a different
+  subscriber asking the same question.
+
+  Reference: Azure Architecture Center — "Provide custom authentication to Azure
+  OpenAI in Foundry Models through a gateway" → General Recommendations →
+  "Address caching safely":
+    "make sure the identity of the requestor is considered in the cache logic.
+     Do not return cached results for identities that are not authorized to
+     receive that data."
+
+  Scoping strategy used here: context.Subscription.Id (per-subscription isolation).
+  Alternative: context.Product.Id (per-tier isolation; allows cache sharing within
+  a tier but not across tiers). Per-subscription is the safer default.
+
+  PCI DSS NOTE: Do NOT apply this policy to Gold/PCI-scoped API operations.
+  See pci-dss-cardholder-data-protection.xml — cached AI responses may contain
+  CHD context and violate PCI DSS Req 3.
 -->
 
 <policies>
@@ -24,11 +45,17 @@ Applied to: /ai/completions endpoint only (not tool calls)
             return bodyContent?["messages"]?[0]?["content"]?.ToString() ?? "";
         }" />
         
-        <!-- 2. Create cache key (hash of prompt) -->
+        <!-- 2. Create cache key: subscription-scoped prompt hash
+             Scoping by context.Subscription.Id ensures that cached responses
+             are never returned to a different subscriber, preventing cross-LOB
+             data leakage even when two subscribers send identical prompts.
+             CAF requirement: identity of the requestor must be part of cache key. -->
         <set-variable name="cache-key" value="@{
+            var subscriptionId = context.Subscription.Id ?? "anonymous";
             var prompt = (string)context.Variables["prompt"];
+            var raw = subscriptionId + "|" + prompt;
             using (var sha = new System.Security.Cryptography.SHA256Managed()) {
-                var hashBytes = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(prompt));
+                var hashBytes = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(raw));
                 return System.Convert.ToBase64String(hashBytes).Substring(0, 32);
             }
         }" />

@@ -1,8 +1,8 @@
 # CRITICAL: SDK Endpoint Routing Verification
 
-**Status:** ⚠️ UNVERIFIED ASSUMPTION  
-**Risk Level:** HIGH  
-**Impact:** Bypass of all APIM policies (quotas, caching, audit)
+**Status:** ✅ RESOLVED — Network-layer enforcement  
+**Risk Level:** LOW (mitigated)  
+**Mitigation:** Both Foundry accounts have `publicNetworkAccess: 'Disabled'` (see `infrastructure/bicep/foundry-hub-project.bicep`). Even if the SDK constructs internal Azure URLs, those requests are physically blocked at the network layer — the only egress path is via APIM private endpoint.
 
 ## The Problem
 
@@ -185,12 +185,17 @@ resource privateEndpoint 'Microsoft.Network/privateEndpoints@2023-04-01' = {
 
 ### Option 2: Azure Firewall Rules
 
+The Foundry AIServices accounts have `publicNetworkAccess: 'Disabled'` declared in
+`infrastructure/bicep/apim-gateway.bicep`. This is enforced at provision time via
+`azd provision` — no runtime command is needed. Verify the current state:
+
 ```bash
-# Allow ONLY APIM managed identity to reach Foundry
-az ml workspace update \
-  --name my-foundry-project \
-  --allowed-ip-ranges "YOUR_APIM_SUBNET_CIDR" \
-  --public-network-access Disabled
+# Read-only: confirm public network access is disabled
+az cognitiveservices account show \
+  --name <foundry-account-name> \
+  --resource-group <rg-name> \
+  --query "properties.publicNetworkAccess" --output tsv
+# Expected output: Disabled
 ```
 
 ### Option 3: Custom SDK Wrapper (If bypass detected)

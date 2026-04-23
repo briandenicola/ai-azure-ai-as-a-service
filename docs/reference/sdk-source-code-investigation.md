@@ -181,7 +181,7 @@ grep -A 10 "def create_run" agents/*.py
 
 ## Report Your Findings
 
-Create an issue or update `SDK-ENDPOINT-VERIFICATION.md` with your findings:
+Create an issue or update `docs/reference/sdk-endpoint-verification.md` with your findings:
 
 ```markdown
 ## SDK Investigation Results

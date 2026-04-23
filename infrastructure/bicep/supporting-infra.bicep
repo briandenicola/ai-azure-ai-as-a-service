@@ -30,7 +30,7 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
     sku: {
       name: 'PerGB2018'
     }
-    retentionInDays: 90  // Increase to 395 for PCI DSS Req 10.5.1 production compliance
+    retentionInDays: 395  // PCI DSS Req 10.5.1: 13 months (395 days); matches README and architecture docs
     features: {
       enableLogAccessUsingOnlyResourcePermissions: true
     }
