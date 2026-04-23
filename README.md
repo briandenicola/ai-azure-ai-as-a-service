@@ -6,12 +6,12 @@ Enterprise platform for deploying Azure AI (LLMs, Agents, Evaluations) as a gove
 
 ## Quick Start by Role
 
-| I am a | Start here |
-|---|---|
-| **Developer** building AI apps | [Developer Quick Start](docs/developer-quickstart.md) |
-| **Platform Engineer** setting up the platform | [Deploying the Platform](#deploying-the-platform) |
-| **IT Manager or Architect** evaluating the approach | [Architecture Decision Records](docs/adr/) |
-| **Compliance Engineer** reviewing PCI controls | [PCI DSS v4.0 Compliance](#pci-dss-v40-compliance) |
+| I am a | What I do | Start here |
+|---|---|---|
+| **Developer** building AI apps | Builds AI-powered applications that call LLMs and agents through the platform. Uses standard OpenAI SDK — just swaps the endpoint. | [Developer Quick Start](docs/developer-quickstart.md) |
+| **Platform Engineer** setting up the platform | Builds and operates the platform. Runs `azd provision`, manages Bicep and APIM policies, sets quotas, monitors dashboards, and responds to incidents. | [Deploying the Platform](#deploying-the-platform) |
+| **IT Manager or Architect** evaluating the approach | Evaluates and approves the platform. Reviews architecture decisions, security model, compliance posture, and whether this approach fits organisational standards. | [Architecture Decision Records](docs/adr/) |
+| **Compliance Engineer** reviewing PCI controls | Audits the platform's PCI DSS v4.0 controls — WAF, VNet isolation, CHD detection, key management, and audit logging. | [PCI DSS v4.0 Compliance](#pci-dss-v40-compliance) |
 
 ---
 
