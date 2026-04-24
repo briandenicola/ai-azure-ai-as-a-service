@@ -11,6 +11,34 @@
 
 ## Overview
 
+### Key Concepts
+
+Before diving in, keep these definitions in mind — every section of this playbook uses them, and confusing them is the most common source of miscommunication between developers, platform engineers, and IT managers.
+
+#### Core Terms
+
+| Term | What it is |
+|---|---|
+| **Quota** | Your *allowed allocation* — the maximum rate limits you may assign across deployments in your subscription, assigned per subscription, per region, and per model in TPM and RPM. Quota is a customer-adjustable logical ceiling; you can request increases or redistribute it between deployments without opening a support ticket. |
+| **Capacity** | The *physical hardware availability* in an Azure region. Having quota does **not** guarantee capacity: if a region's compute resources for a model are fully consumed, a deployment will fail even when your subscription quota shows room. Capacity is Microsoft-controlled; you cannot increase it directly. |
+| **Deployment** | *What you provision* — a specific model instance within a Foundry resource, configured with a deployment type and a capacity value (TPM ceiling). Deployment is where quota and capacity intersect: it succeeds only when both your quota allocation and regional physical capacity are available. |
+| **Usage** | *What you consume* — the running token count against your quota. For Usage Tier purposes, Microsoft measures usage *per tenant* across all subscriptions, all regions, and all deployments simultaneously. Usage drives throttling (429s), billing, and is the signal that prompts quota or capacity adjustments. |
+
+> **Why Azure separates these four things:** Quota is customer-adjustable. Capacity is a Microsoft-controlled physical reality. Deployment is the act that requires both simultaneously. Usage is the ongoing measurement that may prompt you to adjust any of the three. Collapsing them into a single concept of "limits" — as many cloud providers do — is the most common source of support tickets and quota planning mistakes on this platform.
+
+#### Additional Concepts
+
+| Concept | What it is |
+|---|---|
+| **Quota Tier** (Free, Tier 1–6) | Determines the default TPM/RPM allocation ceiling per model per region for your subscription. Auto-upgrades over time based on consumption trends, EA/MCA-E contract status, and payment history. Controls how much quota you *can have*, not what you currently have assigned to deployments. You can opt out of auto-upgrade by requesting the `NoAutoUpgrade` flag. |
+| **Usage Tier** | A **separate**, per-tenant tier system — not the same as Quota Tier despite the similar name. Defines the throughput level above which predictable latency is no longer guaranteed: exceeding your usage tier can more than double response latency even when no 429 is returned. Measured across all subscriptions and regions for your entire Entra tenant. Applies only to Standard, GlobalStandard, and DataZoneStandard deployments — not PTU or batch. |
+| **Deployment Type** | Determines how inference is routed and which quota pool is consumed. The four types are: **Standard** (single-region, shared infrastructure), **GlobalStandard** (globally load-balanced across Azure regions), **DataZoneStandard** (data-zone routing for data-residency requirements), and **Provisioned / PTU** (dedicated capacity, separate quota pool, hourly billing). Standard quota cannot be applied to a Provisioned deployment — they draw from entirely separate pools. |
+| **PTU (Provisioned Throughput Unit)** | The billing unit for Provisioned deployments. One PTU reserves a fixed amount of model compute; you are billed per PTU-hour regardless of actual token consumption. PTU deployments return 429 immediately when utilisation exceeds 100% (by design, not as an error) — configure fallback routing to standard deployments on PTU 429s. |
+| **Rate Limit vs. Quota Exhaustion** | Two distinct throttling mechanisms with different error codes and reset timelines. A **429 Too Many Requests** means the TPM or RPM ceiling was exceeded within the current rolling window — it resets within seconds to a minute. A **403 Forbidden** from APIM means the fixed-window cumulative token *budget* is fully consumed and will not reset until the window (e.g., monthly) rolls over. 429 = temporary spike; 403 = budget gone for the period. |
+| **Shared Quota Pool** | A temporary pool of quota Azure provides for testing new models without opening a support ticket. Usage-billed, shared across all Azure customers, and subject to availability. Unsuitable for production workloads — use only for initial model evaluation before requesting dedicated quota. |
+
+### Two-Layer Quota System
+
 Quota in this platform operates at **two independent layers** that must be kept in alignment. Understanding both is essential before adjusting any limit.
 
 | Layer | Enforced by | Where configured | Scope |
@@ -90,7 +118,7 @@ Azure OpenAI's rate-limit enforcement is **distributed**, meaning enforcement is
 
 | Limit | Value |
 |---|---|
-| Foundry resources per region per Azure subscription | **100** |
+| Foundry resources per region per Azure subscription | **30** |
 | Max projects per Foundry resource | 250 |
 | Max deployments per Foundry resource | **32** |
 | Max custom request headers | 10 (HTTP 431 if exceeded) |
