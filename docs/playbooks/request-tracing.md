@@ -77,9 +77,92 @@ Both rows share the same `OperationId`, giving a parent/child relationship that 
 | **APIM inbound span** | Application Insights | `AppRequests` | Full request metadata — HTTP method, URL, duration, HTTP status, `X-Correlation-Id` in `customDimensions` | `OperationId`, `customDimensions["Request-Header-X-Correlation-Id"]` |
 | **APIM → Foundry call** | Application Insights | `AppDependencies` | Backend call to Foundry — URL, duration, backend HTTP status, `X-Backend-Region-Used` | `OperationId` (same as parent `AppRequests` row) |
 | **APIM gateway log** | Log Analytics | `ApiManagementGatewayLogs` | Routing decision, response code, backend URL, subscription ID | `CorrelationId` column (populated from `context.RequestId`) |
-| **PCI DSS audit record** | Log Analytics (Event Hub sink) | Custom table or Event Hub stream | Subscription ID, user identity, Entra `appid`, client IP, operation, product, department, timestamp | `pci-audit-request-id` = `context.RequestId` |
+| **PCI DSS audit record** | Log Analytics (Event Hub sink) | Custom table or Event Hub stream | Subscription ID, LOB app identity (`appid`), **end-user identity (`user_oid`, `user_upn`)**, client IP, operation, product, department, timestamp | `pci-audit-request-id` = `context.RequestId` |
 
 > **Body logging is disabled.** APIM diagnostic settings have `body: { bytes: 0 }` on both request and response for PCI DSS Req 3.3. `BackendResponseBody` in `ApiManagementGatewayLogs` will be `null` for every row. This is intentional — for token counts, use the `azure-openai-emit-token-metric` policy output in Application Insights custom metrics rather than response body parsing.
+
+---
+
+## Caller Identity vs Correlation ID
+
+Correlation IDs (`X-Correlation-Id`, `OperationId`) identify a **request**. They answer "what path did this call take?" not "who made it?". These are separate signals with different purposes and different data sources.
+
+### The two identity levels in this platform
+
+| Signal | What it identifies | Where it lives | Trustworthy? |
+|---|---|---|---|
+| **APIM subscription key** (`Ocp-Apim-Subscription-Key`) | The LOB application or team | `ApiManagementGatewayLogs.SubscriptionId`, PCI audit `subscription_id` | Yes — APIM-validated |
+| **Entra JWT `appid`/`azp`** | The service principal of the calling LOB app | PCI audit `app_id` | Yes — cryptographically signed by Entra ID |
+| **Entra JWT `oid`** | The specific human user who triggered the action | PCI audit `user_oid` | Yes — cryptographically signed by Entra ID |
+| **Entra JWT `upn`/`preferred_username`** | The user's login name (e.g. `drew@contoso.com`) | PCI audit `user_upn` | Yes — cryptographically signed by Entra ID |
+
+The APIM subscription key gives you LOB-level accountability. The JWT `oid` and `upn` give you per-user accountability for AI actions — "which person clicked the button that triggered this model call?"
+
+### Why LOB apps can (and should) propagate user identity
+
+If the LOB app already requires a user login (Entra ID SSO), the user's JWT is already available upstream. The app should pass it to APIM as `Authorization: Bearer <token>`. APIM's `pci-dss-audit-logging.xml` policy then extracts `oid`, `upn`, and `appid` from the token and logs all three on every audit event — no custom code required on the LOB side.
+
+```
+User logs into LOB app
+        │
+        ▼
+Entra ID issues JWT (contains: oid, upn, appid, tid)
+        │
+        ▼
+LOB app calls APIM
+    Authorization: Bearer <JWT>
+    Ocp-Apim-Subscription-Key: <key>
+    X-Department-Id: <department>
+        │
+        ▼
+APIM PCI audit log records:
+    subscription_id = <APIM subscription>    ← LOB team identity
+    app_id          = <JWT appid>            ← LOB application identity
+    user_oid        = <JWT oid>              ← human user (Entra object ID)
+    user_upn        = <JWT upn>              ← human user (login name)
+    correlation_id  = <X-Correlation-Id>    ← request trace anchor
+```
+
+### What NOT to do — the spoofable header anti-pattern
+
+Do **not** pass user identity as a plain custom header:
+
+```
+X-User-Id: drew@contoso.com   ← spoofable, no cryptographic proof
+```
+
+Anyone can send any value in a custom header. There is no signature to verify. This pattern fails PCI DSS Req 10.2.1.1 ("individual user access") because the "identity" is unverifiable. Use JWT claims only.
+
+### Multi-agent and OBO scenarios
+
+If the LOB app calls downstream services on behalf of the user (agent chains, tool calls, Foundry sub-agents), user context is lost if the downstream call uses a new service credential rather than the original token. Two correct approaches:
+
+- **On-Behalf-Of (OBO) flow**: The app exchanges the user token for a new token scoped to the downstream service — the `oid` is preserved and the new token is still tied to the original user.
+- **Claims propagation**: Extract `oid` and `upn` at the APIM boundary, set them as trusted request variables, and pass them explicitly to downstream services via internal headers (only safe inside a private VNet where intermediate hops are trusted).
+
+For this platform's Silver and Gold tier use of the Agents API, the Foundry agent itself runs under APIM's managed identity — the Foundry call is always service-to-service. The user `oid`/`upn` are captured at the APIM boundary (in the PCI audit log) and do not need to be re-propagated to Foundry; they are already recorded against the same `request_id`.
+
+### Querying by user identity in the audit log
+
+```kql
+// All AI actions triggered by a specific user in the last 7 days
+// (query the Event Hub sink table — adjust table name to match your sink config)
+AzureDiagnostics
+| where TimeGenerated > ago(7d)
+| where properties_user_upn_s == "drew@contoso.com"
+| project
+    TimeGenerated,
+    properties_user_oid_s,
+    properties_user_upn_s,
+    properties_app_id_s,
+    properties_subscription_id_s,
+    properties_api_s,
+    properties_operation_s,
+    properties_product_s,
+    properties_http_status_code_s,
+    properties_request_id_s
+| order by TimeGenerated desc
+```
 
 ---
 
@@ -180,6 +263,8 @@ AzureDiagnostics
     properties_pci_audit_sub_id_s,
     properties_pci_audit_user_id_s,
     properties_pci_audit_app_id_s,
+    properties_user_oid_s,           // end-user Entra object ID
+    properties_user_upn_s,           // end-user login name (e.g. drew@contoso.com)
     properties_pci_audit_client_ip_s,
     properties_pci_audit_product_s,
     properties_pci_audit_department_s,

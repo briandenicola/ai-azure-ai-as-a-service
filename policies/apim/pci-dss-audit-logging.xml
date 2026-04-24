@@ -81,6 +81,47 @@ IMPORTANT — NEVER LOG REQUEST/RESPONSE BODIES:
       return "unknown";
     }" />
 
+    <!-- Extract end-user object ID (oid) — identifies the human who triggered this AI action -->
+    <!-- Distinct from app_id (the calling application): oid = user, appid = LOB app service principal -->
+    <set-variable name="pci-audit-user-oid" value="@{
+      try {
+        var auth = context.Request.Headers.GetValueOrDefault("Authorization", string.Empty);
+        if (auth.StartsWith("Bearer ")) {
+          var parts = auth.Substring(7).Split('.');
+          if (parts.Length == 3) {
+            var padding = parts[1].Length % 4 == 0 ? 0 : 4 - parts[1].Length % 4;
+            var decoded = System.Text.Encoding.UTF8.GetString(
+              Convert.FromBase64String(parts[1] + new string('=', padding)));
+            var claims = Newtonsoft.Json.Linq.JObject.Parse(decoded);
+            return claims.Value<string>("oid") ?? "unknown";
+          }
+        }
+      } catch { }
+      return "unknown";
+    }" />
+
+    <!-- Extract user principal name — human-readable login identity (e.g. user@contoso.com) -->
+    <!-- Falls back through OIDC preferred_username then AAD v1 unique_name -->
+    <set-variable name="pci-audit-user-upn" value="@{
+      try {
+        var auth = context.Request.Headers.GetValueOrDefault("Authorization", string.Empty);
+        if (auth.StartsWith("Bearer ")) {
+          var parts = auth.Substring(7).Split('.');
+          if (parts.Length == 3) {
+            var padding = parts[1].Length % 4 == 0 ? 0 : 4 - parts[1].Length % 4;
+            var decoded = System.Text.Encoding.UTF8.GetString(
+              Convert.FromBase64String(parts[1] + new string('=', padding)));
+            var claims = Newtonsoft.Json.Linq.JObject.Parse(decoded);
+            return claims.Value<string>("upn")
+                ?? claims.Value<string>("preferred_username")
+                ?? claims.Value<string>("unique_name")
+                ?? "unknown";
+          }
+        }
+      } catch { }
+      return "unknown";
+    }" />
+
     <!-- Emit ACCESS_REQUEST audit event to Event Hub (PCI DSS Req 10.2.1.1) -->
     <log-to-eventhub logger-id="ai-tokenlog">
       <expression>@{
@@ -90,6 +131,8 @@ IMPORTANT — NEVER LOG REQUEST/RESPONSE BODIES:
           pci_requirement   = "PCI DSS v4.0 Req 10.2.1.1",
           timestamp         = (string)context.Variables["pci-audit-timestamp"],
           user_id           = (string)context.Variables["pci-audit-user-id"],
+          user_oid          = (string)context.Variables["pci-audit-user-oid"],
+          user_upn          = (string)context.Variables["pci-audit-user-upn"],
           app_id            = (string)context.Variables["pci-audit-app-id"],
           subscription_id   = (string)context.Variables["pci-audit-sub-id"],
           subscription_name = (string)context.Variables["pci-audit-sub-name"],
@@ -145,6 +188,8 @@ IMPORTANT — NEVER LOG REQUEST/RESPONSE BODIES:
           timestamp           = DateTime.UtcNow.ToString("o"),
           request_timestamp   = (string)context.Variables["pci-audit-timestamp"],
           user_id             = (string)context.Variables["pci-audit-user-id"],
+          user_oid            = (string)context.Variables["pci-audit-user-oid"],
+          user_upn            = (string)context.Variables["pci-audit-user-upn"],
           app_id              = (string)context.Variables["pci-audit-app-id"],
           subscription_id     = (string)context.Variables["pci-audit-sub-id"],
           client_ip           = (string)context.Variables["pci-audit-client-ip"],
@@ -174,6 +219,8 @@ IMPORTANT — NEVER LOG REQUEST/RESPONSE BODIES:
               pci_requirement  = "PCI DSS v4.0 Req 10.2.1.4",
               timestamp        = DateTime.UtcNow.ToString("o"),
               user_id          = (string)context.Variables["pci-audit-user-id"],
+              user_oid         = (string)context.Variables["pci-audit-user-oid"],
+              user_upn         = (string)context.Variables["pci-audit-user-upn"],
               client_ip        = (string)context.Variables["pci-audit-client-ip"],
               api              = (string)context.Variables["pci-audit-api"],
               request_path     = (string)context.Variables["pci-audit-path"],
@@ -196,6 +243,8 @@ IMPORTANT — NEVER LOG REQUEST/RESPONSE BODIES:
               pci_requirement  = "PCI DSS v4.0 Req 10.2.1.2 / 10.2.1.4",
               timestamp        = DateTime.UtcNow.ToString("o"),
               user_id          = (string)context.Variables["pci-audit-user-id"],
+              user_oid         = (string)context.Variables["pci-audit-user-oid"],
+              user_upn         = (string)context.Variables["pci-audit-user-upn"],
               subscription_id  = (string)context.Variables["pci-audit-sub-id"],
               client_ip        = (string)context.Variables["pci-audit-client-ip"],
               api              = (string)context.Variables["pci-audit-api"],
@@ -225,6 +274,8 @@ IMPORTANT — NEVER LOG REQUEST/RESPONSE BODIES:
           pci_requirement  = "PCI DSS v4.0 Req 10.2.1.7",
           timestamp        = DateTime.UtcNow.ToString("o"),
           user_id          = (string)context.Variables["pci-audit-user-id"],
+          user_oid         = (string)context.Variables["pci-audit-user-oid"],
+          user_upn         = (string)context.Variables["pci-audit-user-upn"],
           subscription_id  = (string)context.Variables["pci-audit-sub-id"],
           client_ip        = (string)context.Variables["pci-audit-client-ip"],
           api              = (string)context.Variables["pci-audit-api"],
