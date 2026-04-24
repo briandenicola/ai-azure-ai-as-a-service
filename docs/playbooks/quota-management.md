@@ -30,7 +30,7 @@ Before diving in, keep these definitions in mind — every section of this playb
 
 | Concept | What it is |
 |---|---|
-| **Quota Tier** (Free, Tier 1–6) | Determines the default TPM/RPM allocation ceiling per model per region for your subscription. Auto-upgrades over time based on consumption trends, EA/MCA-E contract status, and payment history. Controls how much quota you *can have*, not what you currently have assigned to deployments. You can opt out of auto-upgrade by requesting the `NoAutoUpgrade` flag. |
+| **Quota Tier** (Free, Tier 1–6) | Determines the **maximum TPM/RPM you are allowed to allocate** per model per region for your subscription. Think of it as the ceiling on your quota ceiling. Auto-upgrades over time based on consumption trends, Microsoft agreement type (EA/MCA-E starts higher), and payment history — no support ticket needed for routine growth. Tier 6 = highest allocations; Free = minimal. Approving a manual quota increase does **not** change your tier number — the tier goes up on its own schedule, but you can always request more quota within your current tier. You can opt out of auto-upgrade with the `NoAutoUpgrade` flag. |
 | **Usage Tier** | A **separate**, per-tenant tier system — not the same as Quota Tier despite the similar name. Defines the throughput level above which predictable latency is no longer guaranteed: exceeding your usage tier can more than double response latency even when no 429 is returned. Measured across all subscriptions and regions for your entire Entra tenant. Applies only to Standard, GlobalStandard, and DataZoneStandard deployments — not PTU or batch. |
 | **Deployment Type** | Determines how inference is routed and which quota pool is consumed. The four types are: **Standard** (single-region, shared infrastructure), **GlobalStandard** (globally load-balanced across Azure regions), **DataZoneStandard** (data-zone routing for data-residency requirements), and **Provisioned / PTU** (dedicated capacity, separate quota pool, hourly billing). Standard quota cannot be applied to a Provisioned deployment — they draw from entirely separate pools. |
 | **PTU (Provisioned Throughput Unit)** | The billing unit for Provisioned deployments. One PTU reserves a fixed amount of model compute; you are billed per PTU-hour regardless of actual token consumption. PTU deployments return 429 immediately when utilisation exceeds 100% (by design, not as an error) — configure fallback routing to standard deployments on PTU 429s. |
@@ -193,36 +193,102 @@ Example: a `gpt-4o` deployment with `capacity: 5` (5,000 TPM) gets 30 RPM automa
 
 ## Quota Tier System (Microsoft Foundry — April 2026)
 
-Microsoft assigns subscriptions to quota **tiers (Free, 1–6)** rather than a single default:
+### Why Quota Tiers Exist
 
-- Your initial tier is based on **consumption trends** and your **Microsoft agreement type** (EA / MCA-E customers start higher).
-- Tiers **auto-upgrade** as usage grows — no support ticket required.
-- Tier 6 has the highest default limits; Tier 1 represents new subscriptions with minimal history.
-- Manual increases are still possible at any tier via the [quota request form](https://aka.ms/oai/stuquotarequest).
-- The exact thresholds and timelines for auto-upgrades are **not publicly disclosed**. If you need capacity immediately, submit a manual request rather than waiting for auto-upgrade.
+Before Quota Tiers, Azure Foundry offered only two quota levels for pay-as-you-go subscriptions: **Default** and **Enterprise**. The gap between them was large, the process to move between them was slow (requiring a support engagement), and there was no automatic growth path as a customer's usage matured. This created significant friction for workloads scaling from prototype to production.
 
-### Tier 6 Reference Values (highest published)
+Microsoft introduced the Quota Tier system to fix this:
 
-| Model | Tier 6 TPM |
+> *"Quotas will now increase automatically with usage, helping avoid rate limit errors while also creating a fairer environment for all users."* — Microsoft Foundry documentation
+
+Key improvements over the old model:
+- **Seven tiers** (Free + Tiers 1–6) replace two fixed levels
+- **Automatic upgrades** as usage grows — no support ticket required for routine scaling
+- All existing subscriptions were migrated at tier levels **equal to or higher** than their previous allocation. No previously approved increases were reduced.
+- Manual increase requests are still available at any tier if you need to grow faster than the auto-upgrade schedule
+
+### How Tiers Are Assigned
+
+Your **initial tier** is determined at the subscription level based on two factors:
+
+| Factor | What it considers |
 |---|---|
-| gpt-4.1 | 5,000,000,000 (5B) |
-| gpt-4.1-mini | 1,500,000,000 (1.5B) |
-| gpt-4o | 500,000,000 (500M) |
-| gpt-4o-mini | 1,500,000,000 (1.5B) |
-| o3-mini | 1,500,000,000 (1.5B) |
-| gpt-5 | 5,000,000,000 (5B) |
+| **Consumption trends** | Your historical token usage across Foundry Models — how much you are actually using today |
+| **Microsoft relationship** | Enterprise Agreement (EA) or Microsoft Customer Agreement — Enterprise (MCA-E) customers are assigned higher initial tiers |
 
-Always verify current values at [learn.microsoft.com/azure/foundry/openai/quotas-limits#quota-tier-reference](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits).
+Your **ongoing tier** is further influenced by:
+- **Payment history** — consistent, timely payment is a factor in upgrade eligibility
+- **Usage growth** — if your current tier is constraining your actual usage, the system will upgrade you automatically
 
-### Usage Tier and Latency
+The exact thresholds, measurement windows, and timelines for auto-upgrades are **not publicly disclosed** by Microsoft. If you cannot afford to wait for the automatic schedule, submit a manual quota increase request.
 
-Operating above your **usage tier** can degrade response latency even without triggering a hard 429:
+### What a Tier Does (and Does Not Do)
 
-- Response latency may increase by more than **2×** compared to operating within your tier.
-- Latency variability is most pronounced for high sustained usage or bursty traffic.
-- Usage is measured **per tenant** (across all subscriptions and regions in your tenant for that model), not per individual Azure subscription.
+This is the most commonly misunderstood point:
 
-If you observe persistent latency degradation at scale, this is a signal you have outgrown your current tier. Options: request a quota increase, wait for an automatic upgrade, or consider Provisioned Throughput Units (PTUs).
+> **A tier sets the ceiling on how much quota you are *allowed to allocate* — it does not itself allocate any quota.**
+
+Practically:
+- Moving from Tier 1 to Tier 3 expands the *maximum* you could request or assign. It does not automatically add TPM to any deployment.
+- Foundry deployments still need their `capacity` parameter updated in Bicep and re-provisioned to actually use any additional quota. The tier just means you are now permitted to set higher `capacity` values.
+- **Approved manual quota increases do not change your tier number.** Your tier stays where it is, but the specific model/region quota is increased above the tier's default. Both can coexist.
+
+```
+Tier 3  ← what you're allowed to allocate (ceiling)
+  │
+  ├─ gpt-4o-mini East US: 5,000,000 TPM  ← your current allocation (can be less than tier max)
+  │     └─ Foundry deployment capacity: 30,000 TPM  ← actual Layer 1 enforcement (Bicep)
+  │           └─ APIM Silver product: 5,000 TPM  ← Layer 2 per-LOB enforcement
+  │
+  └─ gpt-4.1 East US: [not yet allocated]  ← tier permits this model, but no deployment exists yet
+```
+
+### Tier 1 vs Tier 6 — Scale Reference
+
+The range between tiers is dramatic. For the models most relevant to this platform:
+
+| Model | Deployment Type | Tier 1 TPM | Tier 6 TPM | Scale factor |
+|---|---|---|---|---|
+| gpt-4o-mini | GlobalStandard | 2,000,000 | 1,500,000,000 | ~750× |
+| gpt-4o-mini | DataZoneStandard | 1,000,000 | _(not published)_ | — |
+| gpt-4o | DataZoneStandard | 300,000 | 500,000,000 | ~1,667× |
+| gpt-4.1 | GlobalStandard | 1,000,000 | 5,000,000,000 | 5,000× |
+| gpt-4.1-mini | GlobalStandard | 5,000,000 | 1,500,000,000 | 300× |
+| o3-mini | GlobalStandard | 500,000 | 1,500,000,000 | 3,000× |
+| gpt-5 | GlobalStandard | 1,000,000 | 5,000,000,000 | 5,000× |
+
+> These values represent the quota you are **allowed to allocate**, not what is automatically assigned. Verify current tier reference values at [learn.microsoft.com/azure/foundry/openai/quotas-limits#quota-tier-reference](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits#quota-tier-reference).
+
+### Auto-Upgrade Mechanics
+
+Auto-upgrades operate silently in the background. What this means in practice:
+
+| Behaviour | Detail |
+|---|---|
+| **Trigger** | Your usage grows to the point where the current tier is constraining your ability to use Foundry. Microsoft monitors this automatically. |
+| **What changes** | Your subscription moves to the next higher tier. All default model allocations increase to the new tier's values. |
+| **What does not change** | Existing `capacity` values in your Bicep files. A tier upgrade does not push changes to your deployed resources — you still need to update Bicep and run `azd provision` to consume the new headroom. |
+| **Timing** | Not publicly disclosed. Do not plan releases or capacity changes around the expectation of an auto-upgrade arriving on a specific date. |
+| **Notification** | No Azure portal notification or Event Grid event is emitted when your tier changes. Check via the API (below). |
+
+### Auto-Upgrade vs Manual Request — When to Use Which
+
+| Situation | Recommended approach |
+|---|---|
+| Gradual organic growth — existing workloads scaling up over weeks | Let auto-upgrade work. No action needed. |
+| Planned new LOB onboarding — known capacity need in 2–4 weeks | Submit manual quota request now. Don't wait. |
+| Immediate capacity need (launch tomorrow) | Submit manual quota request and contact your Microsoft account team if urgent. |
+| Experimenting with a new model family for the first time | Use the **Shared Quota Pool** for initial testing, then request dedicated quota once you know the production TPM requirement. |
+| You use quota limits as a cost control mechanism | **Opt out of auto-upgrade** (see below). Use Azure Cost Management for billing controls instead. |
+
+### Platform-Specific Implications
+
+On this APIM-fronted architecture, the Quota Tier affects Layer 1 headroom — not Layer 2 enforcement:
+
+- **APIM product limits (Layer 2)** are set in Bicep and do not change when your tier changes. Bronze/Silver/Gold TPM limits are defined values, not tier-dependent.
+- **A tier upgrade gives you room to raise the Foundry deployment `capacity` (Layer 1)** to support more concurrent LOBs or higher per-LOB limits. But you must make that Bicep change and run `azd provision` yourself.
+- **The Capacity Sizing Rule still applies** regardless of tier: Foundry deployment `capacity` ≥ sum of worst-case simultaneous APIM product limits.
+- **Tier upgrades are subscription-scoped** — they apply to the Azure subscription where your Foundry resources live. If your platform spans multiple Azure subscriptions (e.g., dev, staging, prod are separate subscriptions), each subscription has its own tier and upgrade schedule.
 
 ### Check Your Subscription's Current Tier
 
@@ -235,7 +301,7 @@ az account get-access-token --resource https://management.azure.com --query acce
 
 ### Opt Out of Automatic Tier Upgrades
 
-If you use quota ceilings as a cost-control mechanism, disable auto-upgrades:
+If you use quota ceilings as a cost-control mechanism and a silent tier upgrade would cause unintended spend, disable auto-upgrades:
 
 ```bash
 az account get-access-token --resource https://management.azure.com --query accessToken -o tsv | \
@@ -246,7 +312,29 @@ az account get-access-token --resource https://management.azure.com --query acce
   "https://management.azure.com/subscriptions/<SUB_ID>/providers/Microsoft.CognitiveServices/quotaTiers/default?api-version=2025-10-01-preview"
 ```
 
-> **Note:** The opt-out API is in preview and may change. Microsoft recommends using Azure Cost Management for billing control rather than quota caps as the primary cost-control mechanism.
+> **Caution:** The opt-out API is in preview and may change or be removed. Microsoft's recommended pattern for billing control is [Azure Cost Management](https://learn.microsoft.com/en-us/azure/foundry/concepts/manage-costs) with budgets and alerts — not quota caps, which are a blunt instrument that can cause unexpected 403s for production workloads.
+
+### Usage Tier and Latency Degradation
+
+The **Usage Tier** is a separate, per-tenant concept (not the same as Quota Tier despite the similar name). Operating above your usage tier can degrade response latency even without triggering a hard 429:
+
+- Response latency may increase by more than **2×** compared to operating within your tier.
+- Latency variability is most pronounced for high sustained usage or bursty traffic patterns.
+- Usage is measured **per Entra tenant** — across all Azure subscriptions, all regions, and all deployments for that model in your organisation. A single high-traffic LOB can push the entire tenant above its usage tier threshold, degrading response times for all other LOBs sharing the same tenant.
+- Applies only to Standard, GlobalStandard, and DataZoneStandard deployments. PTU and batch deployments are not affected.
+
+**Usage tier reference for key models (token threshold above which latency degrades):**
+
+| Model | Usage Tier Threshold |
+|---|---|
+| gpt-4o | 12 billion tokens/minute |
+| gpt-4o-mini | 85 billion tokens/minute |
+| gpt-4.1 | 30 billion tokens/minute |
+| gpt-4.1-mini | 150 billion tokens/minute |
+| o3-mini | 50 billion tokens/minute |
+| o4-mini | 50 billion tokens/minute |
+
+If you observe persistent latency degradation at scale without 429s, you are likely above the usage tier. Options: request a quota increase, or migrate high-volume deployments to PTU for dedicated, guaranteed throughput.
 
 ---
 
