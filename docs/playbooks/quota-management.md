@@ -1,9 +1,9 @@
-# Playbook: Quota Management — Azure AI as a Service
+﻿# Playbook: Quota Management â€” Azure AI as a Service
 
 **Audience:** Platform Engineers, IT Managers  
 **Complexity:** Intermediate
 
-> **All infrastructure is managed via `azd provision`.** Bicep is the single source of truth for all APIM policy values and Foundry deployment capacities. Do not patch resources in the Azure Portal or via mutating `az` commands — they will be overwritten on the next provision.
+> **All infrastructure is managed via `azd provision`.** Bicep is the single source of truth for all APIM policy values and Foundry deployment capacities. Do not patch resources in the Azure Portal or via mutating `az` commands â€” they will be overwritten on the next provision.
 
 > **Disclaimer:** Azure AI Foundry is an evolving platform. Quota values, tier structures, and limits described here align with official Microsoft documentation as of April 2026. Always verify current limits at [learn.microsoft.com/azure/foundry/openai/quotas-limits](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits).
 
@@ -16,27 +16,27 @@ Quota in this platform operates at **two independent layers** that must be kept 
 | Layer | Enforced by | Where configured | Scope |
 |---|---|---|---|
 | **1. Foundry deployment capacity** | Azure CognitiveServices | `infrastructure/bicep/foundry-hub-project.bicep` | Per deployment, per region, per Azure subscription |
-| **2a. APIM product token limit** | APIM `azure-openai-token-limit` policy | `infrastructure/bicep/apim-gateway.bicep` (product policies) | Per APIM subscription key — actual token count |
-| **2b. APIM department call limit** | APIM `rate-limit-by-key` policy | `policies/apim/token-quota-by-department.xml` | Per `X-Department-Id` header — counts HTTP requests, not tokens |
+| **2a. APIM product token limit** | APIM `azure-openai-token-limit` policy | `infrastructure/bicep/apim-gateway.bicep` (product policies) | Per APIM subscription key â€” actual token count |
+| **2b. APIM department call limit** | APIM `rate-limit-by-key` policy | `policies/apim/token-quota-by-department.xml` | Per `X-Department-Id` header â€” counts HTTP requests, not tokens |
 
 **The relationship:**
 
 ```
 Caller
-  │
-  ▼
-APIM (Layer 2 — enforces per-LOB TPM limits before requests leave the gateway)
-  │  429 if LOB exceeds APIM limit
-  ▼
-Azure Foundry (Layer 1 — enforces subscription-wide deployment capacity)
-  │  429 if all callers combined exceed the Foundry deployment's TPM cap
-  ▼
+  â”‚
+  â–¼
+APIM (Layer 2 â€” enforces per-LOB TPM limits before requests leave the gateway)
+  â”‚  429 if LOB exceeds APIM limit
+  â–¼
+Azure Foundry (Layer 1 â€” enforces subscription-wide deployment capacity)
+  â”‚  429 if all callers combined exceed the Foundry deployment's TPM cap
+  â–¼
 Model
 ```
 
-APIM limits should always be the effective constraint. If the sum of all APIM product limits can exceed the Foundry deployment capacity, 429s will pass through to callers from Foundry — bypassing APIM's rate-limit accounting entirely, and without the `Retry-After` header APIM would normally set.
+APIM limits should always be the effective constraint. If the sum of all APIM product limits can exceed the Foundry deployment capacity, 429s will pass through to callers from Foundry â€” bypassing APIM's rate-limit accounting entirely, and without the `Retry-After` header APIM would normally set.
 
-> **Capacity Sizing Rule:** The Foundry deployment `capacity` (Layer 1) must always be greater than or equal to the maximum number of *simultaneously active* APIM subscription keys multiplied by their per-key TPM limit. Concretely: if you have 10 Silver keys (5,000 TPM each) that could all fire at once, your Foundry deployment needs at least 50,000 TPM of capacity, or APIM will shed load to Foundry before it sheds it at the gateway — breaking the per-LOB accounting model. When adding new APIM products or approving new LOB subscriptions, always verify Layer 1 capacity can absorb the worst-case combined load.
+> **Capacity Sizing Rule:** The Foundry deployment `capacity` (Layer 1) must always be greater than or equal to the maximum number of *simultaneously active* APIM subscription keys multiplied by their per-key TPM limit. Concretely: if you have 10 Silver keys (5,000 TPM each) that could all fire at once, your Foundry deployment needs at least 50,000 TPM of capacity, or APIM will shed load to Foundry before it sheds it at the gateway â€” breaking the per-LOB accounting model. When adding new APIM products or approving new LOB subscriptions, always verify Layer 1 capacity can absorb the worst-case combined load.
 
 ---
 
@@ -56,7 +56,7 @@ This estimated count is added to a running token counter for the current minute 
 
 ### RPM Enforcement Timing
 
-Rate limits are evaluated on a **per-second rolling basis**, not only at the per-minute boundary. If you exceed the tokens-per-second threshold or the RPM threshold over a 1–10 second window, a 429 is returned before the full minute has elapsed. This means bursty traffic can be throttled even when the total tokens-per-minute is well below the limit.
+Rate limits are evaluated on a **per-second rolling basis**, not only at the per-minute boundary. If you exceed the tokens-per-second threshold or the RPM threshold over a 1â€“10 second window, a 429 is returned before the full minute has elapsed. This means bursty traffic can be throttled even when the total tokens-per-minute is well below the limit.
 
 **Practical implication for this platform:** Spread requests over time rather than batching. The APIM `estimate-prompt-tokens="true"` setting causes APIM itself to reject oversized burst windows at the gateway level before the request reaches Foundry.
 
@@ -77,7 +77,7 @@ Each model has a maximum number of simultaneous in-flight requests. Representati
 
 | Model family | Max concurrent requests |
 |---|---|
-| Azure OpenAI models (gpt-4o, gpt-4o-mini, etc.) | Varies by SKU — see [quotas-limits](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits) |
+| Azure OpenAI models (gpt-4o, gpt-4o-mini, etc.) | Varies by SKU â€” see [quotas-limits](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits) |
 | Llama 3.3 70B Instruct | 300 |
 | DeepSeek-R1, DeepSeek-V3 | 300 |
 | Most other Foundry Models | 300 |
@@ -95,7 +95,7 @@ Azure OpenAI's rate-limit enforcement is **distributed**, meaning enforcement is
 | Max deployments per Foundry resource | **32** |
 | Max custom request headers | 10 (HTTP 431 if exceeded) |
 
-> **32 deployments per resource is a hard limit.** If you need more model deployments than 32, create an additional Foundry resource. Do not design around this limit using workarounds — add a new resource in `foundry-hub-project.bicep` and provision it.
+> **32 deployments per resource is a hard limit.** If you need more model deployments than 32, create an additional Foundry resource. Do not design around this limit using workarounds â€” add a new resource in `foundry-hub-project.bicep` and provision it.
 
 > **Custom headers:** Future API versions will not pass through custom headers. Do not design systems that depend on more than 10 custom headers or rely on header pass-through behaviour.
 
@@ -104,8 +104,8 @@ Azure OpenAI's rate-limit enforcement is **distributed**, meaning enforcement is
 | Scenario | Recommended client timeout |
 |---|---|
 | Reasoning models (o1, o3, o3-mini, o4-mini) | Up to 29 minutes |
-| Non-reasoning models — streaming | Up to 60 seconds |
-| Non-reasoning models — non-streaming | Up to 29 minutes |
+| Non-reasoning models â€” streaming | Up to 60 seconds |
+| Non-reasoning models â€” non-streaming | Up to 29 minutes |
 
 Set these timeouts in your SDK client configuration. The default timeout in most HTTP clients (30 seconds) is too low for non-streaming long completions.
 
@@ -113,7 +113,7 @@ Set these timeouts in your SDK client configuration. The default timeout in most
 
 ## Current Configured Values
 
-### Layer 1 — Foundry deployment capacity (`foundry-hub-project.bicep`)
+### Layer 1 â€” Foundry deployment capacity (`foundry-hub-project.bicep`)
 
 | Account | Region | Model deployment | SKU | `capacity` | Effective TPM |
 |---|---|---|---|---|---|
@@ -125,9 +125,9 @@ Set these timeouts in your SDK client configuration. The default timeout in most
 > **Why is primary `capacity=1`?** This is intentionally low to trigger the APIM circuit-breaker failover during load tests. Raise to `5` or higher for production (`5` = 5,000 TPM). See [`policies/apim/circuit-breaker-multi-region.xml`](../../policies/apim/circuit-breaker-multi-region.xml).
 
 In Bicep, `capacity` = thousands of TPM. `capacity: 5` = 5,000 TPM.  
-RPM is derived automatically (ratio varies by model — see [TPM→RPM Ratios](#tpmrpm-ratios)).
+RPM is derived automatically (ratio varies by model â€” see [TPMâ†’RPM Ratios](#tpmrpm-ratios)).
 
-### Layer 2 — APIM product limits (`apim-gateway.bicep`)
+### Layer 2 â€” APIM product limits (`apim-gateway.bicep`)
 
 | Product | Models available | TPM limit | RPM limit |
 |---|---|---|---|
@@ -137,17 +137,17 @@ RPM is derived automatically (ratio varies by model — see [TPM→RPM Ratios](#
 
 APIM enforces product-level token limits via the `azure-openai-token-limit` policy embedded in each product policy in `apim-gateway.bicep`, keyed on `context.Subscription.Id`. This counts actual prompt + completion tokens and returns a 429 when the per-minute budget is exhausted.
 
-#### Department-level secondary limit (`token-quota-by-department.xml`) — call-count based
+#### Department-level secondary limit (`token-quota-by-department.xml`) â€” call-count based
 
-A supplementary policy in `policies/apim/token-quota-by-department.xml` applies a secondary limit keyed on the `X-Department-Id` request header. **Important:** this policy uses `rate-limit-by-key` which counts **HTTP requests (calls)**, not tokens. It is currently configured at 100,000 calls over a 30-day rolling window — a coarse safety net to prevent any single department from monopolising gateway capacity.
+A supplementary policy in `policies/apim/token-quota-by-department.xml` applies a secondary limit keyed on the `X-Department-Id` request header. **Important:** this policy uses `rate-limit-by-key` which counts **HTTP requests (calls)**, not tokens. It is currently configured at 100,000 calls over a 30-day rolling window â€” a coarse safety net to prevent any single department from monopolising gateway capacity.
 
-> **Known gap:** `rate-limit-by-key` is not token-aware — a single large 8K-token request and a single 10-token request count equally. For true per-department token enforcement, this policy should be upgraded to `azure-openai-token-limit` keyed on `X-Department-Id`. See the `azure-openai-token-limit` policy reference in the [Reference](#reference) section.
+> **Known gap:** `rate-limit-by-key` is not token-aware â€” a single large 8K-token request and a single 10-token request count equally. For true per-department token enforcement, this policy should be upgraded to `azure-openai-token-limit` keyed on `X-Department-Id`. See the `azure-openai-token-limit` policy reference in the [Reference](#reference) section.
 
-> **Deployment note:** `token-quota-by-department.xml` is **not currently wired into any Bicep resource** — it exists as a reference/design file. Editing it and running `azd provision` has **no effect** on the deployed APIM instance. To deploy it, it must be referenced from a Bicep `Microsoft.ApiManagement/service/apis/policies` resource. See [Adjusting APIM Product Limits](#adjusting-apim-product-limits-iac-only) for the integration pattern.
+> **Deployment note:** `token-quota-by-department.xml` is **not currently wired into any Bicep resource** â€” it exists as a reference/design file. Editing it and running `azd provision` has **no effect** on the deployed APIM instance. To deploy it, it must be referenced from a Bicep `Microsoft.ApiManagement/service/apis/policies` resource. See [Adjusting APIM Product Limits](#adjusting-apim-product-limits-iac-only) for the integration pattern.
 
 ---
 
-## TPM→RPM Ratios
+## TPMâ†’RPM Ratios
 
 Microsoft sets RPM proportionally to TPM. The ratios vary by model family:
 
@@ -163,12 +163,12 @@ Example: a `gpt-4o` deployment with `capacity: 5` (5,000 TPM) gets 30 RPM automa
 
 ---
 
-## Quota Tier System (Microsoft Foundry — April 2026)
+## Quota Tier System (Microsoft Foundry â€” April 2026)
 
-Microsoft assigns subscriptions to quota **tiers (Free, 1–6)** rather than a single default:
+Microsoft assigns subscriptions to quota **tiers (Free, 1â€“6)** rather than a single default:
 
 - Your initial tier is based on **consumption trends** and your **Microsoft agreement type** (EA / MCA-E customers start higher).
-- Tiers **auto-upgrade** as usage grows — no support ticket required.
+- Tiers **auto-upgrade** as usage grows â€” no support ticket required.
 - Tier 6 has the highest default limits; Tier 1 represents new subscriptions with minimal history.
 - Manual increases are still possible at any tier via the [quota request form](https://aka.ms/oai/stuquotarequest).
 - The exact thresholds and timelines for auto-upgrades are **not publicly disclosed**. If you need capacity immediately, submit a manual request rather than waiting for auto-upgrade.
@@ -190,7 +190,7 @@ Always verify current values at [learn.microsoft.com/azure/foundry/openai/quotas
 
 Operating above your **usage tier** can degrade response latency even without triggering a hard 429:
 
-- Response latency may increase by more than **2×** compared to operating within your tier.
+- Response latency may increase by more than **2Ã—** compared to operating within your tier.
 - Latency variability is most pronounced for high sustained usage or bursty traffic.
 - Usage is measured **per tenant** (across all subscriptions and regions in your tenant for that model), not per individual Azure subscription.
 
@@ -226,13 +226,13 @@ az account get-access-token --resource https://management.azure.com --query acce
 
 ### Foundry portal (read-only)
 
-1. Open [Microsoft Foundry portal](https://ai.azure.com) → **Operate** → **Quota**.
+1. Open [Microsoft Foundry portal](https://ai.azure.com) â†’ **Operate** â†’ **Quota**.
 2. Select **Token per minute** tab.
 3. Click any deployment to see its current allocation, usage bar, and affiliated projects.
 
 Required RBAC: **Cognitive Services Usages Reader** at the subscription level (minimum). Define this role assignment in [`infrastructure/bicep/foundry-apim-rbac.bicep`](../../infrastructure/bicep/foundry-apim-rbac.bicep) and run `azd provision`. Do not assign it ad hoc with `az role assignment create`.
 
-### REST API — query usage per region
+### REST API â€” query usage per region
 
 ```python
 # pip install azure-identity requests
@@ -254,7 +254,7 @@ for usage in r.json()["value"]:
     print(f"{usage['name']['localizedValue']:50s}  {usage['currentValue']:>8} / {usage['limit']}")
 ```
 
-### REST API — check available capacity by model and region
+### REST API â€” check available capacity by model and region
 
 ```python
 import requests, json
@@ -279,11 +279,11 @@ r = requests.get(
 print(json.dumps(r.json(), indent=2))
 ```
 
-### Log Analytics — APIM token consumption by subscription (KQL)
+### Log Analytics â€” APIM token consumption by subscription (KQL)
 
-> **Prerequisite:** The `BackendResponseBody` column in `ApiManagementGatewayLogs` is only populated when APIM diagnostic settings have response body logging enabled. This is disabled by default (PCI DSS Req 3.3 — avoid logging sensitive data). If body logging is off, `TokensConsumed` will be `null` for every row.
+> **Prerequisite:** The `BackendResponseBody` column in `ApiManagementGatewayLogs` is only populated when APIM diagnostic settings have response body logging enabled. This is disabled by default (PCI DSS Req 3.3 â€” avoid logging sensitive data). If body logging is off, `TokensConsumed` will be `null` for every row.
 >
-> For reliable token tracking **without** enabling body logging, add the [`azure-openai-emit-token-metric`](https://learn.microsoft.com/en-us/azure/api-management/azure-openai-emit-token-metric-policy) policy to `apim-gateway.bicep` — it writes token counts directly to Application Insights custom metrics without capturing the response body.
+> For reliable token tracking **without** enabling body logging, add the [`azure-openai-emit-token-metric`](https://learn.microsoft.com/en-us/azure/api-management/azure-openai-emit-token-metric-policy) policy to `apim-gateway.bicep` â€” it writes token counts directly to Application Insights custom metrics without capturing the response body.
 
 ```kql
 // Token usage per APIM subscription in the last 24 hours
@@ -300,7 +300,7 @@ ApiManagementGatewayLogs
 ```
 
 ```kql
-// Rate-limit (429) events by subscription — identify who is being throttled
+// Rate-limit (429) events by subscription â€” identify who is being throttled
 ApiManagementGatewayLogs
 | where TimeGenerated > ago(1h)
 | where ResponseCode == 429
@@ -316,7 +316,7 @@ See also: [`scripts/check-foundry-capacity.ps1`](../../scripts/check-foundry-cap
 
 When the combined throughput needs of all APIM products exceed what the Foundry deployment can sustain, request a quota increase from Microsoft.
 
-> **Ownership reminder:** This is a **Platform Engineer** responsibility. Developers and IT Managers should not contact Microsoft directly — they escalate via ServiceNow.
+> **Ownership reminder:** This is a **Platform Engineer** responsibility. Developers and IT Managers should not contact Microsoft directly â€” they escalate via ServiceNow.
 
 ### RBAC Required Before Requesting
 
@@ -328,7 +328,7 @@ When the combined throughput needs of all APIM products exceed what the Foundry 
 
 ### What to Include in the Request
 
-Providing evidence of real usage is the most important factor — requests without demonstrated utilisation may be denied.
+Providing evidence of real usage is the most important factor â€” requests without demonstrated utilisation may be denied.
 
 | Element | Why it matters |
 |---|---|
@@ -341,14 +341,14 @@ Providing evidence of real usage is the most important factor — requests witho
 **TPM sizing formula:**
 
 ```
-Required TPM ≈ (avg input tokens + avg output tokens) × requests per minute × safety factor (1.5–2×)
+Required TPM â‰ˆ (avg input tokens + avg output tokens) Ã— requests per minute Ã— safety factor (1.5â€“2Ã—)
 
-Example: 50 users × (1,000 input + 500 output tokens) × 0.5 req/min × 1.5 = 56,250 TPM
+Example: 50 users Ã— (1,000 input + 500 output tokens) Ã— 0.5 req/min Ã— 1.5 = 56,250 TPM
 ```
 
 ### Process
 
-1. Confirm the current limit is actually the bottleneck — check for Foundry 429s in Log Analytics, not just APIM throttles.
+1. Confirm the current limit is actually the bottleneck â€” check for Foundry 429s in Log Analytics, not just APIM throttles.
 2. Submit the [quota increase request form](https://aka.ms/oai/stuquotarequest).
 3. Requests are processed **in order received**; priority goes to subscriptions actively using their existing quota allocation.
 4. EA / MCA-E subscribers may be auto-assigned higher tiers without a request.
@@ -364,7 +364,7 @@ Example: 50 users × (1,000 input + 500 output tokens) × 0.5 req/min × 1.5 = 5
 To raise or lower the TPM allocated to a Foundry deployment, edit `infrastructure/bicep/foundry-hub-project.bicep`:
 
 ```bicep
-// Before — intentionally low for failover demo
+// Before â€” intentionally low for failover demo
 resource gpt4oMini1 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
   parent: foundry1
   name: 'gpt-4o-mini'
@@ -375,13 +375,13 @@ resource gpt4oMini1 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01
   ...
 }
 
-// After — raise for production load
+// After â€” raise for production load
 resource gpt4oMini1 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
   parent: foundry1
   name: 'gpt-4o-mini'
   sku: {
     name: 'Standard'
-    capacity: 30  // 30K TPM — enough for all LOBs at peak
+    capacity: 30  // 30K TPM â€” enough for all LOBs at peak
   }
   ...
 }
@@ -395,20 +395,20 @@ azd provision
 
 **Capacity increments:** `capacity: 1` = 1,000 TPM, `capacity: 30` = 30,000 TPM. The maximum is capped by your subscription's quota in that region and model family. If `azd provision` fails with `QuotaExceeded`, submit the increase form first (see above).
 
-**Sequential deployment constraint:** Multiple model deployments on the same Foundry account must be created sequentially — hence the `dependsOn` in the Bicep. Do not remove those dependencies.
+**Sequential deployment constraint:** Multiple model deployments on the same Foundry account must be created sequentially â€” hence the `dependsOn` in the Bicep. Do not remove those dependencies.
 
 ---
 
 ## Adjusting APIM Product Limits (IaC-only)
 
-APIM limits are enforced by two mechanisms — edit both together:
+APIM limits are enforced by two mechanisms â€” edit both together:
 
 ### 1. Per-product TPM/RPM in `apim-gateway.bicep`
 
 Locate the APIM product policy definitions and update the `azure-openai-token-limit` attributes:
 
 ```xml
-<!-- Bronze product policy — 500 TPM -->
+<!-- Bronze product policy â€” 500 TPM -->
 <azure-openai-token-limit
     counter-key="@(context.Subscription.Id)"
     tokens-per-minute="500"
@@ -417,8 +417,8 @@ Locate the APIM product policy definitions and update the `azure-openai-token-li
 ```
 
 **Rate limit vs. fixed-window quota:** The policy supports both:
-- `tokens-per-minute` — rolling per-minute rate limit → **429** when exceeded
-- `token-quota` + `token-quota-period` — fixed-window budget (e.g., monthly) → **403** when exhausted
+- `tokens-per-minute` â€” rolling per-minute rate limit â†’ **429** when exceeded
+- `token-quota` + `token-quota-period` â€” fixed-window budget (e.g., monthly) â†’ **403** when exhausted
 
 Example with a monthly budget in addition to per-minute rate limit:
 
@@ -449,7 +449,7 @@ resource deptQuotaApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2023-
 }
 ```
 
-> **Multi-region note:** APIM tracks token counters **per gateway node** independently, not aggregated across the entire Premium multi-region instance. If you have APIM units in East US and West US, each unit maintains its own counter. A caller could consume up to 2× the configured `tokens-per-minute` by load-balancing across both units. Account for this in your limit values.
+> **Multi-region note:** APIM tracks token counters **per gateway node** independently, not aggregated across the entire Premium multi-region instance. If you have APIM units in East US and West US, each unit maintains its own counter. A caller could consume up to 2Ã— the configured `tokens-per-minute` by load-balancing across both units. Account for this in your limit values.
 
 ---
 
@@ -465,25 +465,25 @@ resource deptQuotaApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2023-
 
 ### Multi-Region Deployment
 
-Deploying a model to an additional Azure region gives access to another set of TPM/RPM quotas for that model. This platform already provisions a secondary Foundry account in West US — to increase platform capacity, raise its `capacity` value in Bicep first before adding a new region.
+Deploying a model to an additional Azure region gives access to another set of TPM/RPM quotas for that model. This platform already provisions a secondary Foundry account in West US â€” to increase platform capacity, raise its `capacity` value in Bicep first before adding a new region.
 
 ### Provisioned Throughput Units (PTUs)
 
 PTUs provide dedicated, reserved capacity for a model, separate from the shared quota system. They are billed hourly based on deployed PTUs (prorated for partial hours).
 
 Key operational notes:
-- **Deploy first, reserve second:** Quota does not guarantee physical capacity — deploy to confirm capacity exists, then purchase a reservation for long-term cost savings.
-- **PTU ≠ free scaling:** You pay for deployed PTUs whether used or not; right-sizing is essential.
+- **Deploy first, reserve second:** Quota does not guarantee physical capacity â€” deploy to confirm capacity exists, then purchase a reservation for long-term cost savings.
+- **PTU â‰  free scaling:** You pay for deployed PTUs whether used or not; right-sizing is essential.
 - **Output token weighting:** For some models (e.g., GPT-5), 1 output token counts as 8 input tokens toward utilisation. Workloads with large completions need more PTUs than prompt size alone suggests.
-- **PTU 429s are fast-fail signals:** A PTU deployment returns 429 when utilisation exceeds 100% — this is by design. Configure routing to fall back to standard deployments on PTU 429s.
+- **PTU 429s are fast-fail signals:** A PTU deployment returns 429 when utilisation exceeds 100% â€” this is by design. Configure routing to fall back to standard deployments on PTU 429s.
 
 PTU sizing rule of thumb:
 
 ```
-Input-equivalent tokens/min = RPM × (input_tokens + output_tokens × weight)
-Estimated PTU = input-equivalent tokens/min ÷ (input TPM per PTU)
+Input-equivalent tokens/min = RPM Ã— (input_tokens + output_tokens Ã— weight)
+Estimated PTU = input-equivalent tokens/min Ã· (input TPM per PTU)
 
-Example: 40 RPM × (1,000 + 400 × 8) = 168,000 input-equiv/min ÷ 4,750 ≈ 36 PTU
+Example: 40 RPM Ã— (1,000 + 400 Ã— 8) = 168,000 input-equiv/min Ã· 4,750 â‰ˆ 36 PTU
 ```
 
 ---
@@ -526,10 +526,10 @@ For LOBs that need a quota increase (higher APIM product tier or a new monthly b
    |---|---|---|
    | > $1,000 | High | VP |
    | > $100 | Medium | Manager |
-   | ≤ $100 | Low | Auto-approved |
+   | â‰¤ $100 | Low | Auto-approved |
 
 3. On approval, ServiceNow calls the outbound REST Message to the Azure Function App.
-4. Function App updates the APIM subscription limit **via the APIM Management API** — or, for permanent limit changes, creates a Bicep PR for platform team review.
+4. Function App updates the APIM subscription limit **via the APIM Management API** â€” or, for permanent limit changes, creates a Bicep PR for platform team review.
 
 For ServiceNow setup prerequisites, see [`automation/servicenow/setup/setup-guide.md`](../../automation/servicenow/setup/setup-guide.md).
 
@@ -542,7 +542,7 @@ For ServiceNow setup prerequisites, see [`automation/servicenow/setup/setup-guid
 | Metric | Where | Alarm threshold |
 |---|---|---|
 | `TokensConsumed` (APIM) | Application Insights | > 90% of product TPM limit sustained for 5 min |
-| `BlockedCalls` (APIM) | Application Insights | Any spike — indicates callers are being throttled |
+| `BlockedCalls` (APIM) | Application Insights | Any spike â€” indicates callers are being throttled |
 | `SuccessfulCalls` drop | Application Insights | > 20% drop from baseline |
 | Foundry 429 rate | Log Analytics `ApiManagementGatewayLogs` | > 5% of requests return 429 from backend |
 
@@ -561,14 +561,14 @@ Create this as a Scheduled Query Rule in Log Analytics pointing at the `ai-logs`
 
 ---
 
-## Troubleshooting — 429 FAQ
+## Troubleshooting â€” 429 FAQ
 
 ### Why am I seeing 429s when my usage metrics appear below quota?
 
 APIM token counting and Azure Monitor metrics are **not the same signal**:
 
 - **Rate limiting** is evaluated on *estimated* token usage (prompt size + `max_tokens`) at request-arrival time, using the per-second rolling window.
-- **Azure Monitor metrics** reflect *billed* tokens from completed responses — after processing.
+- **Azure Monitor metrics** reflect *billed* tokens from completed responses â€” after processing.
 
 A request can hit the rate limit before any tokens are billed. Common causes:
 
@@ -624,7 +624,7 @@ You need both: quota headroom from Microsoft, and the `capacity` value in Bicep 
 |---|---|
 | [Azure OpenAI quotas and limits](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits) | Default limits, quota tier reference, batch quotas |
 | [Foundry Models quotas and limits](https://learn.microsoft.com/en-us/azure/ai-foundry/model-inference/quotas-limits) | Non-OpenAI model limits |
-| [Manage quota — Foundry portal](https://learn.microsoft.com/en-us/azure/foundry/how-to/quota) | How to view and request quota in the portal |
+| [Manage quota â€” Foundry portal](https://learn.microsoft.com/en-us/azure/foundry/how-to/quota) | How to view and request quota in the portal |
 | [Quota increase request form](https://aka.ms/oai/stuquotarequest) | Submit a quota increase to Microsoft |
 | [APIM azure-openai-token-limit policy](https://learn.microsoft.com/en-us/azure/api-management/azure-openai-token-limit-policy) | Policy attributes, examples, streaming notes |
 | [Enforce Token Limits with AI Gateway](https://learn.microsoft.com/en-us/azure/ai-foundry/configuration/enable-ai-api-management-gateway-portal) | Foundry portal AI Gateway setup |
@@ -634,60 +634,3 @@ You need both: quota headroom from Microsoft, and the `capacity` value in Bicep 
 | `policies/apim/token-quota-by-department.xml` | Per-department secondary rate limit |
 | `automation/servicenow/quota_increase_workflow.py` | ServiceNow quota increase request client |
 | `scripts/check-foundry-capacity.ps1` | PowerShell script to query current Foundry capacity |
-# Azure OpenAI / Azure AI Foundry — Quota & Capacity Management Playbook
-
-## Overview
-
-This playbook provides IT professionals and platform engineers with operational guidance on managing quotas, rate limits, and capacity for **Azure OpenAI in Microsoft Foundry Models** (formerly referred to as Azure OpenAI Service). All guidance is aligned with official Microsoft documentation as of April 2026.
-
-Effective quota management ensures applications avoid throttling (HTTP 429 errors), maintain predictable latency, and scale cost-efficiently across teams and regions. This document covers how quotas are scoped and allocated, the new tier system, rate-limit enforcement mechanics, APIM-based routing and failover patterns, RBAC roles, monitoring, and operational best practices.
-
----
-
-## Scope of Quota
-
-Quotas are enforced at the **Azure subscription** level — not the tenant level[1](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits). Within a subscription, quotas are defined **per region, per model, and per deployment type**[1](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits).
-
-**Practical effect:** If a model such as `gpt-4.1` Global Standard is listed with **5 million TPM** and **5,000 RPM**, then *each region* where that model/deployment type is available has its own dedicated quota pool of that amount for *each* of your Azure subscriptions[1](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits). A single subscription can therefore consume a larger total of TPM and RPM for a given model across multiple regions, as long as resources and deployments are distributed accordingly[1](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits).
-
-**Resource limit:** Each subscription is limited to a maximum of **30 Azure OpenAI resource instances per region**[2](https://techcommunity.microsoft.com/blog/fasttrackforazureblog/optimizing-azure-openai-a-guide-to-limits-quotas-and-best-practices/4076268)[3](https://github.com/Azure/aoai-apim).
-
-### Quota vs. Capacity
-
-Having subscription quota does **not** guarantee that a region can physically allocate the deployment. If a region's compute resources for a model are fully consumed, you may see deployment errors even though your subscription's quota shows availability. You can check per-region capacity in two ways:
-
-- **Foundry portal** at [ai.azure.com](https://ai.azure.com)[1](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits)
-- **Capacity API** — query `subscriptionId`, `model_name`, and `model_version` to get available capacity across all regions and deployment types for your subscription[1](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits)
-
-> **Note:** Both the Foundry portal and the capacity API currently return quota/capacity information for models that are retired and no longer available for new deployments[1](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits). Confirm model availability separately before planning capacity.
-
----
-
-## Quota Tiers
-
-Microsoft has replaced the former binary "Default" and "Enterprise" quota levels with a **seven-tier system**: **Free Tier** and **Tiers 1 through 6**, with Tier 6 offering the highest quotas[1](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits).
-
-### How Tiers Are Assigned
-
-A subscription's initial tier is based on **current usage of that model** and the **customer's relationship with Microsoft** — Enterprise Agreement (EA) or MCA-E customers are assigned higher tiers[1](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits). Any previously approved quota increases are retained and will not be reduced when transitioning to the new system[1](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits).
-
-### Automatic Tier Upgrades
-
-As a customer's consumption increases such that the current tier is limiting usage of Foundry Models, the system **automatically upgrades** the subscription to the next higher tier[1](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits). Microsoft considers:
-
-- **Consumption trends** across Foundry Models over time[1](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits)
-- **Enterprise relationship** status (EA, MCA-E)[1](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits)
-- **Payment history**[1](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits)
-
-### Opting Out of Auto-Upgrades
-
-You can opt out by setting the `NoAutoUpgrade` flag via the management API. Microsoft acknowledges that some customers use quota ceilings to manage billing, and the opt-out prevents unintended quota expansion[1](https://learn.microsoft.com/en-us/azure/foundry/openai/quotas-limits).
-
-```bash
-curl -X PATCH \
-   "https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.CognitiveServices/quotaTiers/default?api-version=2025-10-01-preview" \
-  -H "Authorization: Bearer <your_access_token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "properties": {
-      "tier
