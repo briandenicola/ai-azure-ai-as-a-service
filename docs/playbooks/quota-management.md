@@ -191,6 +191,58 @@ Example: a `gpt-4o` deployment with `capacity: 5` (5,000 TPM) gets 30 RPM automa
 
 ---
 
+## Deployment Type Reference
+
+How inference traffic is routed — and which quota pool is consumed — depends entirely on the deployment type chosen for a Foundry resource. Standard quota cannot be converted to, or applied toward, a Provisioned deployment; the pools are completely separate.
+
+### The four deployment types
+
+| Type | Routing | Quota pool | Data residency | Best for |
+|---|---|---|---|---|
+| **Standard** | Single Azure region (where the Foundry resource is deployed) | Regional shared pool — separate per region | Data stays in the declared region | Predictable routing, data-residency requirements, default choice |
+| **GlobalStandard** | Azure routes globally — you declare a "home" region but traffic may be served from any Azure region | Global shared pool — separate from all Standard pools | Data **may** be processed outside the declared region | Maximum throughput without managing multi-region failover yourself |
+| **DataZoneStandard** | Constrained to a geographic data zone (e.g., `EuropeanUnion`, `UnitedStates`) | Data-zone shared pool — separate from regional Standard | Data stays within declared zone boundary | Compliance requirements banning cross-zone data movement while still wanting better availability than single-region Standard |
+| **Provisioned / PTU** | Single region, dedicated capacity | Dedicated PTU pool — completely separate from all token-based pools | Data stays in declared region | Predictable low latency, high-volume steady-state workloads |
+
+> **Quota pools are completely independent.** A Standard deployment's TPM allocation cannot be applied to a GlobalStandard deployment, and vice versa. When requesting quota increases, specify the deployment type explicitly — a quota increase for Standard does not add headroom to your GlobalStandard pool.
+
+### Standard vs. GlobalStandard — the key tradeoff for this platform
+
+This platform uses **Standard** deployments for all current Foundry resources. The implications:
+
+| Consideration | Standard (current) | GlobalStandard |
+|---|---|---|
+| **Multi-region failover** | You manage it — APIM circuit-breaker policy routes to West US secondary on 429/5xx | Azure manages it automatically — no circuit-breaker policy needed |
+| **Quota pool** | Regional — East US and West US have separate quota allocations that you manage independently | Single global pool — no region-to-region allocation split |
+| **Data residency** | Guaranteed — data does not leave the declared region | Not guaranteed — requests may be served from any Azure region |
+| **PCI DSS / data sovereignty** | Compatible — deterministic in-region processing | Requires compliance review before adoption — data residency not guaranteed |
+| **Regional capacity competition** | Competes with other Azure customers in East US for Standard capacity | Spread globally — regional capacity exhaustion less likely to affect you |
+
+**Why this platform chose Standard:** The circuit-breaker pattern in [`policies/apim/circuit-breaker-multi-region.xml`](../../policies/apim/circuit-breaker-multi-region.xml) is already implemented, and the PCI DSS audit logging requirements in [`policies/apim/pci-dss-audit-logging.xml`](../../policies/apim/pci-dss-audit-logging.xml) benefit from deterministic in-region processing. GlobalStandard would eliminate the need for the West US secondary Foundry account — but requires a full compliance review to confirm data-residency acceptability before any migration.
+
+### DataZoneStandard and PCI DSS
+
+If your compliance requirements mandate that data does not leave a defined geographic zone but you want more resilience than a single-region Standard deployment:
+
+- **DataZoneStandard** routes within the declared zone (e.g., `EuropeanUnion`, `UnitedStates`)
+- This platform is currently US-only with Standard. If expanding to EU regions, DataZoneStandard in the `EuropeanUnion` zone is the correct type — not Standard in a single EU region
+- Quota increases for DataZoneStandard are requested separately from Standard quota; they draw from a different pool
+
+### Checking which deployment type each resource uses
+
+```bash
+# List all deployments with their SKU (deployment type) and capacity
+az cognitiveservices account deployment list \
+  --name <foundry-account-name> \
+  --resource-group <rg> \
+  --query "[].{Name:name, SKU:sku.name, Capacity:sku.capacity}" \
+  -o table
+```
+
+Or inspect `infrastructure/bicep/foundry-hub-project.bicep` — the `sku.name` field on each deployment resource is the deployment type (`Standard`, `GlobalStandard`, `DataZoneStandard`, `ProvisionedManaged`).
+
+---
+
 ## Quota Tier System (Microsoft Foundry — April 2026)
 
 ### Why Quota Tiers Exist
@@ -569,6 +621,101 @@ resource deptQuotaApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2023-
 
 ---
 
+## Redistributing Quota Between Deployments
+
+Quota can be redistributed between deployments on the same Foundry resource **without opening a Microsoft support ticket**. This is one of the most useful but least-documented day-2 operations: you can move unused TPM from a low-traffic model to a high-traffic one in minutes, using only a Bicep edit and `azd provision`.
+
+### What redistribution means
+
+Your subscription has a regional TPM allocation for each model. Any allocated TPM not currently assigned to a deployment sits in an undeployed pool. You can:
+
+- **Increase** a deployment's `capacity` by drawing from that undeployed pool
+- **Decrease** a deployment's `capacity` to return TPM to the pool (freeing it for reallocation elsewhere)
+
+Both operations require only a Bicep change and `azd provision` — no Microsoft approval needed.
+
+Redistribution is **within your existing quota**. To add TPM you do not already have, you need a quota increase request to Microsoft (see [Requesting a Foundry Quota Increase](#requesting-a-foundry-quota-increase-microsoft)).
+
+### How to redistribute via Bicep
+
+The following example reallocates 8K TPM from `phi-4` to `gpt-4o-mini` on the primary account:
+
+```bicep
+// Before — phi-4 has unused capacity; gpt-4o-mini is at minimum
+resource gpt4oMini1 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: foundry1
+  name: 'gpt-4o-mini'
+  sku: { name: 'Standard', capacity: 1 }   // 1K TPM
+}
+
+resource phi4_1 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: foundry1
+  name: 'phi-4'
+  sku: { name: 'GlobalStandard', capacity: 10 }   // 10K TPM — underutilised
+  dependsOn: [gpt4oMini1]
+}
+
+// After — reallocate 8K TPM from phi-4 to gpt-4o-mini
+resource gpt4oMini1 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: foundry1
+  name: 'gpt-4o-mini'
+  sku: { name: 'Standard', capacity: 9 }   // 9K TPM (+8K)
+}
+
+resource phi4_1 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: foundry1
+  name: 'phi-4'
+  sku: { name: 'GlobalStandard', capacity: 2 }   // 2K TPM (-8K returned to pool)
+  dependsOn: [gpt4oMini1]
+}
+```
+
+Then apply:
+
+```bash
+azd provision
+```
+
+> **`dependsOn` is required.** Multiple deployments on the same Foundry account must be updated sequentially. If `azd provision` fails with `DeploymentInProgress`, the `dependsOn` chain is missing or incomplete. Do not remove these dependencies.
+
+### What you cannot redistribute
+
+| Restriction | Detail |
+|---|---|
+| **Cross-region** | East US quota cannot be moved to West US — each region has its own independent pool |
+| **Cross-deployment-type** | Standard TPM cannot be applied to a GlobalStandard deployment — separate pools |
+| **Cross-model-family** | TPM allocated for `gpt-4o` cannot be applied to `Phi-4` — each model family has its own pool |
+| **Cross-subscription** | Quota is subscription-scoped — cannot transfer between Azure subscriptions |
+| **Portal redistribution** | The Foundry portal shows a pencil icon in the Affiliated Deployments section. **Do not use it** — portal changes are overwritten on the next `azd provision` |
+
+### Checking available (unallocated) quota before redistributing
+
+```python
+# pip install azure-identity requests
+import requests
+from azure.identity import DefaultAzureCredential
+
+subscription_id = "<SUB_ID>"
+location        = "eastus"
+
+token = DefaultAzureCredential().get_token("https://management.azure.com/.default").token
+r = requests.get(
+    f"https://management.azure.com/subscriptions/{subscription_id}"
+    f"/providers/Microsoft.CognitiveServices/locations/{location}/usages"
+    "?api-version=2023-05-01",
+    headers={"Authorization": f"Bearer {token}"}
+)
+for usage in r.json()["value"]:
+    remaining = usage["limit"] - usage["currentValue"]
+    if remaining > 0:
+        print(f"{usage['name']['localizedValue']:50s}  "
+              f"used={usage['currentValue']} / limit={usage['limit']} / available={remaining}")
+```
+
+This shows unallocated TPM — headroom you can assign to existing deployments without requesting a quota increase.
+
+---
+
 ## Strategies for Increasing Throughput
 
 | Strategy | Best for | Trade-off |
@@ -601,6 +748,55 @@ Estimated PTU = input-equivalent tokens/min ÷ (input TPM per PTU)
 
 Example: 40 RPM × (1,000 + 400 × 8) = 168,000 input-equiv/min ÷ 4,750 ≈ 36 PTU
 ```
+
+### When to Use PTU vs. Standard — Decision Framework
+
+PTU is not always the right choice. The decision depends on traffic profile, latency requirements, and cost tolerance.
+
+| Signal | Recommendation |
+|---|---|
+| **Bursty or unpredictable traffic (demos, batch jobs, dev/test)** | Stay on Standard. PTUs are billed at idle — bursty workloads waste committed spend. |
+| **Steady-state, high-volume traffic (> 50–60% utilisation for 16+ hours/day)** | PTU likely cheaper. Break-even vs. pay-per-token Standard typically occurs at sustained ~50% utilisation. |
+| **P99 latency is a contractual requirement (LOB SLA)** | PTU — dedicated capacity gives predictable latency that Standard shared infrastructure cannot guarantee. |
+| **Testing a new model or new workload** | Standard first. Gather 2+ weeks of real TPM/RPM data before sizing PTUs. |
+| **Very large completions (o-series reasoning models)** | PTU requires careful sizing — o-series output tokens are weighted 8:1 vs. input toward utilisation. A 4,000-token completion counts as 32,000 input-equivalent tokens. |
+| **Need to burst above a known steady-state baseline** | PTU + Standard fallback. Configure the APIM circuit-breaker to fall back to Standard on PTU 429s — the fallback absorbs burst traffic while PTU handles the baseline cost-efficiently. |
+
+### PTU utilisation metric
+
+The metric to monitor is **Provisioned Managed Utilization V2** in Azure Monitor under the Cognitive Services resource. Target range: **50–70%**.
+
+| Utilisation level | Meaning | Action |
+|---|---|---|
+| > 100% | PTU 429s firing — clients are being shed to fallback | Add PTUs or reduce traffic |
+| 80–100% | Approaching shed threshold | Review growth trend; plan PTU increase |
+| 50–70% | Healthy operating range | No action needed |
+| < 20% sustained | Over-provisioned — paying for idle capacity | Reduce PTUs at next reservation renewal |
+
+### Declaring a PTU deployment in Bicep
+
+PTU deployments use `sku.name: 'ProvisionedManaged'` and `capacity` expressed in PTUs — **not** thousands of TPM:
+
+```bicep
+resource gpt4oPtu 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: foundry1
+  name: 'gpt-4o-ptu'
+  sku: {
+    name: 'ProvisionedManaged'
+    capacity: 50   // 50 PTUs — not 50K TPM
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: 'gpt-4o'
+      version: '2024-11-20'
+    }
+  }
+  dependsOn: [gpt4oMini1]
+}
+```
+
+PTU reservations (for committed-use discounts) are purchased separately through Azure Reservations. The Bicep deployment above creates the PTU deployment; the reservation is a billing construct layered on top of it — without a reservation you are billed at the on-demand PTU hourly rate.
 
 ---
 
@@ -653,19 +849,45 @@ For ServiceNow setup prerequisites, see [`automation/servicenow/setup/setup-guid
 
 ## Monitoring and Alerting
 
-### Key metrics to watch
+This platform emits quota-relevant signals at three levels: the APIM gateway, the Foundry backend, and deployed model metrics. Understanding which signal originates from which level is essential for accurate diagnosis — a 429 appearing in Application Insights may be from Layer 2 (APIM policy), Layer 1 (Foundry capacity), or both simultaneously.
 
-| Metric | Where | Alarm threshold |
-|---|---|---|
-| `TokensConsumed` (APIM) | Application Insights | > 90% of product TPM limit sustained for 5 min |
-| `BlockedCalls` (APIM) | Application Insights | Any spike — indicates callers are being throttled |
-| `SuccessfulCalls` drop | Application Insights | > 20% drop from baseline |
-| Foundry 429 rate | Log Analytics `ApiManagementGatewayLogs` | > 5% of requests return 429 from backend |
+### Observability Architecture
 
-### Recommended Log Analytics alert (Foundry 429s)
+```
+APIM Gateway
+  ├─ Application Insights   ← per-call latency, 4xx/5xx rates, token counts
+  │                           (token counts require azure-openai-emit-token-metric policy)
+  └─ Log Analytics          ← full gateway request log (ApiManagementGatewayLogs),
+                              backend response codes, routing decisions
+
+Foundry (CognitiveServices)
+  └─ Azure Monitor          ← deployment-level utilisation, PTU Utilization V2,
+                              capacity headroom per region
+
+Managed Grafana
+  └─ Pre-built dashboards   ← token usage by LOB, latency distribution, failover
+                              frequency (see observability/grafana/)
+```
+
+### Key Metrics to Watch
+
+| Metric | Source | Signal | Alert threshold |
+|---|---|---|---|
+| Token usage per call (custom metric) | Application Insights — `azure-openai-total-token-usage` | Actual token consumption emitted by `azure-openai-emit-token-metric` policy | > 90% of product TPM limit sustained for 5 min |
+| `BlockedCalls` (APIM built-in) | Application Insights | Calls rejected before reaching backend — rate limit or auth failure | Any non-zero spike |
+| Backend 429 rate | `ApiManagementGatewayLogs.BackendResponseCode == 429` | Foundry returning 429 — Layer 1 capacity exhausted | > 5% of requests in any 5-min window |
+| `SuccessfulCalls` drop | Application Insights | Availability degradation | > 20% drop from 7-day rolling baseline |
+| PTU Utilization V2 | Azure Monitor (Cognitive Services resource) | PTU deployment utilisation — applies to PTU deployments only | > 80% sustained for 10 min |
+| Quota headroom (`currentValue / limit`) | `Microsoft.CognitiveServices/locations/usages` REST API | Available vs. allocated quota — proactive capacity check | < 20% remaining (review weekly) |
+
+> **Why `BackendResponseBody` token counts are null:** APIM diagnostic settings have response body logging disabled for PCI DSS Req 3.3 (avoid logging sensitive data in transit). `BackendResponseBody.usage.total_tokens` will be `null` for every row in `ApiManagementGatewayLogs`. For reliable token tracking without body logging, the [`azure-openai-emit-token-metric`](https://learn.microsoft.com/en-us/azure/api-management/azure-openai-emit-token-metric-policy) policy writes token counts directly to Application Insights custom metrics without capturing the response body. Confirm it is present in `apim-gateway.bicep`.
+
+### KQL Queries for Operational Monitoring
+
+#### Foundry backend 429 rate (Layer 1 exhausted)
 
 ```kql
-// Alert: Foundry backend is rate-limiting APIM (Layer 1 exhausted)
+// Alert: Foundry is rate-limiting APIM — Layer 1 capacity exhausted
 ApiManagementGatewayLogs
 | where TimeGenerated > ago(5m)
 | where BackendResponseCode == 429
@@ -673,7 +895,97 @@ ApiManagementGatewayLogs
 | where Count > 50
 ```
 
-Create this as a Scheduled Query Rule in Log Analytics pointing at the `ai-logs` workspace. Define the alert rule in `infrastructure/bicep/supporting-infra.bicep` and apply via `azd provision`.
+#### Per-subscription throttle rate (Layer 2) over 1 hour
+
+```kql
+// Which APIM subscription keys are being throttled, and how often?
+ApiManagementGatewayLogs
+| where TimeGenerated > ago(1h)
+| where ResponseCode == 429
+| summarize ThrottledRequests = count() by SubscriptionId, bin(TimeGenerated, 5m)
+| order by ThrottledRequests desc
+```
+
+#### Approaching-quota early warning (requires emit-token-metric policy)
+
+```kql
+// Token consumption per subscription per minute — approaching-limit early warning
+customMetrics
+| where TimeGenerated > ago(1h)
+| where name == "azure-openai-total-token-usage"
+| summarize TotalTokens = sum(value)
+    by bin(TimeGenerated, 1m), tostring(customDimensions["Subscription ID"])
+| order by TimeGenerated desc
+```
+
+#### Failover event detection — circuit-breaker triggered
+
+```kql
+// Requests routed to West US backend — indicates East US failover
+ApiManagementGatewayLogs
+| where TimeGenerated > ago(1h)
+| where BackendUrl contains "westus"
+| summarize FailoverCount = count(), AvgDurationMs = avg(DurationMs)
+    by bin(TimeGenerated, 5m)
+| order by TimeGenerated desc
+```
+
+### Per-Product Alert Strategy
+
+A generic 429-count alert does not distinguish between a Bronze subscriber legitimately hitting their 500-TPM ceiling (expected, by design) and a Gold subscriber at their 5,500-TPM ceiling (may indicate a real capacity problem). Alert at the product level with thresholds relative to each product's limit:
+
+| Product | TPM limit | Alert at 90% | Interpretation |
+|---|---|---|---|
+| Bronze (`ai-bronze`) | 500 TPM | 450 TPM sustained | Expected at scale — Bronze is sized for limited use. Review if all Bronze keys are simultaneously at threshold. |
+| Silver (`ai-silver`) | 5,000 TPM | 4,500 TPM sustained | Investigate per-LOB growth. Approaching Gold-tier volume — may need upgrade or quota increase. |
+| Gold (`ai-gold`) | 5,500 TPM | 4,950 TPM sustained | **Requires immediate Layer 1 check.** Gold product limit is very close to the East US primary Foundry deployment capacity (currently 1K TPM for demo; raise before production). |
+
+### Deploying Alert Rules via Bicep
+
+Do not create alert rules in the portal. Define them in `infrastructure/bicep/supporting-infra.bicep` and apply via `azd provision`:
+
+```bicep
+resource foundry429Alert 'Microsoft.Insights/scheduledQueryRules@2023-03-15-preview' = {
+  name: 'foundry-backend-429-elevated'
+  location: location
+  properties: {
+    displayName: 'Foundry Layer 1 — Backend 429s Elevated'
+    description: 'Foundry is rate-limiting APIM. Layer 1 capacity may be exhausted.'
+    severity: 1
+    enabled: true
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT5M'
+    scopes: [logAnalyticsWorkspace.id]
+    criteria: {
+      allOf: [{
+        query: '''
+          ApiManagementGatewayLogs
+          | where BackendResponseCode == 429
+          | summarize Count = count()
+          | where Count > 50
+        '''
+        timeAggregation: 'Count'
+        operator: 'GreaterThan'
+        threshold: 0
+      }]
+    }
+    actions: {
+      actionGroups: [actionGroup.id]
+    }
+  }
+}
+```
+
+### Managed Grafana Dashboards
+
+Pre-built dashboards are maintained in [`observability/grafana/`](../../observability/grafana/). They surface:
+
+- Token consumption by LOB (per APIM subscription key)
+- Backend latency distribution per model
+- 429 rate and circuit-breaker failover frequency
+- Layer 1 vs. Layer 2 capacity headroom over time
+
+Access via the Azure portal or the ACI jumpbox. Dashboard JSON is provisioned through Bicep in `supporting-infra.bicep` — do not edit dashboards in the Grafana UI directly, as portal changes will be overwritten on the next `azd provision`.
 
 ---
 
@@ -731,6 +1043,194 @@ Check: you need **Cognitive Services Usages Reader** at the subscription level, 
 | **Increasing Foundry `capacity` (Bicep)** | Allocates more of your existing quota to a specific deployment | Platform Engineer via `azd provision` |
 
 You need both: quota headroom from Microsoft, and the `capacity` value in Bicep set to use it.
+
+---
+
+## Client Retry Strategy and the `Retry-After` Header
+
+When a 429 is returned, both APIM and Foundry set a `Retry-After` response header indicating how many seconds the caller should wait before retrying. Ignoring this header and retrying immediately is the most common way to make throttling worse — a burst of 50 clients ignoring `Retry-After` and retrying at zero delay simply recreates the original burst.
+
+### Where `Retry-After` originates
+
+| Source | Set by | Typical value | Meaning |
+|---|---|---|---|
+| **APIM Layer 2 throttle (429)** | `azure-openai-token-limit` policy | 1–60 seconds | Seconds until the rolling per-minute window has recovered enough to allow the request |
+| **Foundry Layer 1 throttle (429)** | Azure CognitiveServices | 1–60 seconds | Same semantics — Foundry passes its own `Retry-After` back through APIM |
+| **APIM monthly quota exhaustion (403)** | `azure-openai-token-limit` policy (quota mode) | Often days or weeks | Seconds until the end of the fixed billing window — retrying in 30 seconds will not help |
+
+> **Key distinction:** A Layer 2 APIM 429 has a short `Retry-After` (seconds). A 403 from monthly quota exhaustion has a `Retry-After` measuring days. The error code tells you which case you are in.
+
+### SDK retry behaviour and APIM interaction
+
+The `openai` Python SDK and `azure-ai-projects` SDK include built-in retry logic. How this interacts with APIM:
+
+| SDK behaviour | APIM interaction | Risk |
+|---|---|---|
+| SDK retries on 429 with exponential backoff | Works if SDK honours `Retry-After` (v1.x+ does) | Low for well-configured clients |
+| SDK retries on 503/502 (backend errors) | APIM circuit-breaker may already be retrying to the secondary backend | **Double-retry risk:** if both APIM and SDK retry independently, traffic can be amplified 2–4× during a failover event |
+| SDK retries on 403 | APIM 403 = budget exhausted | **Always wrong** — retry won't succeed until the budget window resets |
+
+**Recommendation for LOB developers on this platform:** disable SDK-level retries and implement application-level retry that reads `Retry-After`:
+
+```python
+import time
+import openai
+
+client = openai.AzureOpenAI(
+    azure_endpoint="https://<apim-name>.azure-api.net",
+    api_key="<apim-subscription-key>",
+    max_retries=0,   # disable SDK auto-retry — APIM circuit-breaker handles backend failover
+)
+
+def chat_with_retry(messages, max_attempts=3):
+    for attempt in range(max_attempts):
+        try:
+            return client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages
+            )
+        except openai.RateLimitError as e:
+            retry_after = int(e.response.headers.get("Retry-After", 10))
+            jitter = __import__("random").uniform(0, 2)
+            if attempt < max_attempts - 1:
+                time.sleep(retry_after + jitter)
+            else:
+                raise
+        except openai.PermissionDeniedError:
+            raise   # 403 = monthly quota exhausted — do not retry
+```
+
+### Backoff strategy rules
+
+| Rule | Rationale |
+|---|---|
+| **Always prefer `Retry-After` over backoff formulas** | `Retry-After` is more accurate than any heuristic — it reflects the actual window state |
+| **Use exponential backoff only as a fallback** | For network-level errors not from APIM (no `Retry-After` present) |
+| **Always add jitter** | Prevents thundering herd — multiple clients throttled simultaneously will retry at exactly `Retry-After + 0ms` without jitter, recreating the burst |
+| **Set `max_retries=0` in the SDK** | APIM circuit-breaker handles backend failover; stacking SDK retries on top amplifies traffic during failures |
+| **Do not retry 403** | Monthly budget is gone — retry at next window reset, not immediately |
+
+### Response headers to log
+
+The `azure-openai-token-limit` policy sets headers that give early warning before throttling starts. Instruct LOB developers to log these:
+
+| Header | Meaning |
+|---|---|
+| `X-Remaining-Tokens` | Tokens remaining in the current per-minute window for this subscription key |
+| `X-Remaining-Monthly-Tokens` | Tokens remaining in the monthly budget window (if `token-quota` is configured on the product) |
+| `Retry-After` | Seconds to wait — present on 429 and 403 responses |
+
+Logging `X-Remaining-Tokens` trends allows LOBs to detect approaching-quota conditions before 429s begin, enabling graceful degradation (e.g., switching to a smaller model) rather than hard failure.
+
+---
+
+## Model Retirement and Version Management
+
+Azure AI Foundry retires model versions on a published schedule. When a model version reaches its retirement date, new deployments of that version are blocked, and existing deployments are eventually migrated to a successor or removed. For a platform that pins specific model versions in Bicep, this is a recurring operational event requiring proactive management.
+
+### What happens to quota when a model version retires
+
+| Stage | What happens |
+|---|---|
+| **Retirement announced** | Microsoft publishes a retirement date. No quota change — existing deployments continue to operate. |
+| **Retirement date reached** | New deployments of this version cannot be created. Existing deployments continue to function. |
+| **Auto-migration (if available)** | Microsoft may migrate existing deployments to a successor version on a declared date. Quota allocation transfers to the new version automatically. |
+| **No-successor case** | Deployments are removed. TPM returns to your unallocated quota pool — it is **not lost**, but you must deploy a different model to use it. |
+
+> **Quota is not deleted when a model retires.** The TPM returns to your undeployed pool. The operational risk is a service availability gap if Bicep is not updated before the removal date.
+
+### Checking retirement schedules
+
+```bash
+# List all deployments with their model version and deprecation dates
+az cognitiveservices account deployment list \
+  --name <foundry-account-name> \
+  --resource-group <rg> \
+  --query "[].{Name:name, Model:properties.model.name, Version:properties.model.version, RetirementDate:properties.model.deprecationDate}" \
+  -o table
+```
+
+Published retirement dates are at [learn.microsoft.com/azure/ai-services/openai/concepts/model-retirements](https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/model-retirements).
+
+> **Recommended cadence:** Run this check quarterly, or subscribe to Azure Service Health alerts for Cognitive Services model retirement notifications. Define a Service Health alert rule in `supporting-infra.bicep` to receive proactive notifications.
+
+### Bicep migration path
+
+When a model version is approaching retirement, update `infrastructure/bicep/foundry-hub-project.bicep` before the retirement date:
+
+```bicep
+// Before — pinned version approaching retirement
+resource gpt4oMini1 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: foundry1
+  name: 'gpt-4o-mini'
+  sku: { name: 'Standard', capacity: 1 }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: 'gpt-4o'
+      version: '2024-11-20'   // ← check retirement schedule for this version
+    }
+  }
+}
+
+// After — updated to successor version
+resource gpt4oMini1 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: foundry1
+  name: 'gpt-4o-mini'
+  sku: { name: 'Standard', capacity: 1 }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: 'gpt-4o'
+      version: '2025-02-01'   // ← successor version
+    }
+  }
+}
+```
+
+Then apply:
+
+```bash
+azd provision
+```
+
+> **Deployment name is preserved.** LOB developers and APIM policies reference the *deployment name* (`gpt-4o-mini`), not the model version string. Updating `version` in Bicep and reprovisioning is transparent to callers — no APIM policy changes required.
+
+### Auto-update policy — opt in
+
+As an alternative to manual version pinning, Foundry supports an `versionUpgradeOption` property that controls automatic version migration:
+
+```bicep
+properties: {
+  model: {
+    format: 'OpenAI'
+    name: 'gpt-4o'
+    version: '2024-11-20'
+  }
+  // Options: 'NoAutoUpgrade' | 'OnceNewDefaultVersionAvailable' | 'OnceCurrentVersionExpired'
+  versionUpgradeOption: 'OnceCurrentVersionExpired'   // migrate only at the last possible moment
+}
+```
+
+| Option | Behaviour |
+|---|---|
+| `NoAutoUpgrade` | Version stays pinned — you control all migrations manually via Bicep |
+| `OnceCurrentVersionExpired` | Auto-migrates only when the current version reaches its retirement date — last-resort safety net |
+| `OnceNewDefaultVersionAvailable` | Auto-migrates whenever a new default version is released — **not recommended for production** (behaviour may change between versions) |
+
+**Recommended production setting:** `OnceCurrentVersionExpired` combined with quarterly manual reviews. This prevents a retirement-day outage while giving you control over when to actually migrate.
+
+### Model retirement operational checklist
+
+When a retirement is announced (via Service Health alert or quarterly review):
+
+1. Check [`infrastructure/bicep/foundry-hub-project.bicep`](../../infrastructure/bicep/foundry-hub-project.bicep) for the retiring version string across all model deployments (East US **and** West US).
+2. Identify the successor version from the [model retirements page](https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/model-retirements).
+3. Test the successor version in the Foundry playground or a staging deployment.
+4. Verify LOB-specific prompt templates produce acceptable output on the successor.
+5. Update `version` in Bicep for both primary and secondary accounts.
+6. Run `azd provision` — zero downtime; deployment name is preserved.
+7. Update the **Current Configured Values** table in this playbook.
 
 ---
 
