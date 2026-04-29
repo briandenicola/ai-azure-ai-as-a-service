@@ -131,10 +131,14 @@ hooks:
         Prompt-Region -Label 'Primary'   -EnvVar 'AZURE_LOCATION'           -Default 'eastus'
         Prompt-Region -Label 'Secondary' -EnvVar 'AZURE_SECONDARY_LOCATION' -Default 'westus'
 
-        # Resource group name
+        # Resource group name — derive from env name to match Bicep naming: rg-contoso-ai-platform-<envName>
+        # Read AZURE_ENV_NAME from azd env values (more reliable than $env: during hook execution)
+        $azdEnvName = (azd env get-values 2>$null | Select-String '^AZURE_ENV_NAME=').ToString() -replace '^AZURE_ENV_NAME="?([^"]+)"?$','$1'
+        if (-not $azdEnvName) { $azdEnvName = $env:AZURE_ENV_NAME }
+        if (-not $azdEnvName) { $azdEnvName = 'dev' }
         Write-Host ""
         Prompt-Value -Label 'Resource group name' -EnvVar 'AZURE_RESOURCE_GROUP' `
-          -Default "rg-contoso-ai-platform-$($env:AZURE_ENV_NAME ?? 'dev')" `
+          -Default "rg-contoso-ai-platform-$azdEnvName" `
           -Description 'Name of the Azure resource group to create / deploy into.'
 
         # Deploying user object ID — auto-detect if possible
@@ -193,6 +197,21 @@ hooks:
       interactive: false
       continueOnError: false
   postprovision:
+    - shell: pwsh
+      # Sync AZURE_RESOURCE_GROUP to the actual deployed resource group.
+      # The Bicep names it rg-<prefix>-ai-platform-<envName>, tagged with azd-env-name.
+      # This corrects any mismatch between what the wizard stored and what Bicep created.
+      run: |
+        $envName = $env:AZURE_ENV_NAME
+        if ($envName) {
+          $actualRG = az group list --tag "azd-env-name=$envName" --query "[0].name" -o tsv 2>$null
+          if ($actualRG -and $actualRG -ne $env:AZURE_RESOURCE_GROUP) {
+            Write-Host "Syncing AZURE_RESOURCE_GROUP: '$($env:AZURE_RESOURCE_GROUP)' → '$actualRG'"
+            azd env set AZURE_RESOURCE_GROUP $actualRG
+          }
+        }
+      interactive: false
+      continueOnError: true
     - shell: pwsh
       # Grafana MSI → Monitoring Reader (subscription scope).
       # Done here instead of Bicep to avoid conflicts with Azure-auto-created assignments.
