@@ -72,6 +72,13 @@ if ($APPGW_NAME) {
     $APPGW_FQDN = az network public-ip list -g $RG `
         --query "[?contains(name,'agw')].dnsSettings.fqdn | [0]" -o tsv 2>$null
 }
+# Fallback: if App Gateway not yet deployed, derive the expected FQDN from the APIM name.
+# DNS label in Bicep = toLower('${companyPrefix}-ai-gw-${apimNameSuffix}').
+if (-not $APPGW_FQDN -and $APIM_NAME) {
+    $_apimSuffix   = ($APIM_NAME -replace "^apim-$companyPrefix-", '')
+    $_appGwDnsLabel = "$($companyPrefix.ToLower())-ai-gw-$_apimSuffix"
+    $APPGW_FQDN    = "$_appGwDnsLabel.$PRIMARY_LOCATION.cloudapp.azure.com"
+}
 
 # ── Key Vault ────────────────────────────────────────────────────────────────
 $KV_NAME = az keyvault list -g $RG --query "[0].name" -o tsv 2>$null

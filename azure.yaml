@@ -165,14 +165,13 @@ hooks:
           -EnvVar 'AZURE_DEPLOY_JUMPBOX' -Default $true
         Prompt-Bool -Label 'Deploy automation Function App (Event Grid subscription handler)' `
           -EnvVar 'AZURE_DEPLOY_FUNCTION_APP' -Default $true
-        Prompt-Bool -Label 'Deploy Azure Load Testing resource' `
-          -EnvVar 'AZURE_DEPLOY_LOAD_TEST' -Default $false
 
-        # Optional: SSL cert for App Gateway WAF
+        # SSL cert for App Gateway WAF — auto-generated on first provision if blank.
+        # Override with a CA-signed cert for production.
         Write-Host ""
-        Prompt-Value -Label 'SSL cert Key Vault secret ID (leave blank to skip App Gateway WAF)' `
+        Prompt-Value -Label 'SSL cert Key Vault secret ID (blank = auto-generate self-signed)' `
           -EnvVar 'AZURE_SSL_CERT_KV_SECRET_ID' `
-          -Description 'Format: https://<kv>.vault.azure.net/secrets/<name>/<version>. Press Enter to skip.'
+          -Description 'Format: https://<kv>.vault.azure.net/secrets/<name>/<version>. Leave blank to auto-generate.'
 
         Write-Host ""
         Write-Host "=== Configuration complete. Starting provisioning... ==="
@@ -197,6 +196,37 @@ hooks:
       interactive: false
       continueOnError: false
   postprovision:
+    - shell: pwsh
+      # Auto-create App Gateway self-signed cert on first provision, then re-provision
+      # so App Gateway deploys in the same azd up session.
+      # Guard: only runs when AZURE_SSL_CERT_KV_SECRET_ID was unset at start of this hook
+      # (prevents infinite loop on the re-provision pass).
+      run: |
+        $certLine = azd env get-values 2>$null | Select-String '^AZURE_SSL_CERT_KV_SECRET_ID='
+        $certId   = if ($certLine) { "$certLine" -replace '^AZURE_SSL_CERT_KV_SECRET_ID="?([^"]+)"?$','$1' } else { '' }
+        if (-not $certId) {
+          Write-Host ""
+          Write-Host "=== App Gateway WAF — first-run cert setup ==" -ForegroundColor Cyan
+          Write-Host "  Key Vault is now deployed. Creating self-signed cert..."
+          pwsh -File scripts/create-appgw-cert.ps1
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host ""
+            Write-Host "  Cert created. Re-provisioning to deploy App Gateway WAF..." -ForegroundColor Cyan
+            $provOut = azd provision 2>&1
+            # RoleAssignmentExists is non-fatal — the required RBAC is already in place.
+            if ($LASTEXITCODE -ne 0 -and ("$provOut" -notmatch 'RoleAssignmentExists')) {
+              Write-Error "azd provision (App Gateway) failed. Output:`n$provOut"
+            } else {
+              Write-Host "$provOut"
+            }
+          } else {
+            Write-Error "create-appgw-cert.ps1 failed (exit $LASTEXITCODE). App Gateway NOT deployed."
+          }
+        } else {
+          Write-Host "  App Gateway cert already configured — skipping cert setup." -ForegroundColor Green
+        }
+      interactive: false
+      continueOnError: false
     - shell: pwsh
       # Sync AZURE_RESOURCE_GROUP to the actual deployed resource group.
       # The Bicep names it rg-<prefix>-ai-platform-<envName>, tagged with azd-env-name.

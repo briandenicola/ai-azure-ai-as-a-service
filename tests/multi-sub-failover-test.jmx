@@ -51,7 +51,7 @@
   ==================
   policies/apim/failover-retry.xml must be active on the openai-inference API.
   Provisioned by azd (infrastructure/bicep/apim-gateway.bicep).
-  Primary gpt-4o-mini is permanently at 1K TPM (see run-failover-test.ps1 notes).
+  Primary gpt-4o-mini is permanently at 1K TPM (see run-appgw-failover-test.ps1 notes).
 -->
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
   <hashTree>

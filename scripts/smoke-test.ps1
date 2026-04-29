@@ -34,7 +34,7 @@ $apimName  = ($apimList -split "`n")[0].Trim()
 if (-not $apimName) { Write-Error "No APIM instance found in resource group '$RG'." }
 
 $bronzeKey = (az rest --method POST `
-    --uri "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.ApiManagement/service/$apimName/subscriptions/bronze-test/listSecrets?api-version=2022-08-01" `
+    --uri "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.ApiManagement/service/$apimName/subscriptions/app-branch-advisor/listSecrets?api-version=2022-08-01" `
     2>$null | ConvertFrom-Json).primaryKey
 
 if (-not $bronzeKey) { Write-Error "Could not retrieve Bronze subscription key from APIM '$apimName'." }

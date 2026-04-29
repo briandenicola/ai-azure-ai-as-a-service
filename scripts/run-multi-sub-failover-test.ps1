@@ -27,7 +27,7 @@
 .NOTES
   Prerequisites:
     • azd provision completed (App Gateway + APIM + Foundry deployed)
-    • Primary gpt-4o-mini permanently at 1K TPM (see run-failover-test.ps1 notes)
+    • Primary gpt-4o-mini permanently at 1K TPM (see run-appgw-failover-test.ps1 notes)
     • failover-retry.xml policy active on openai-inference API (provisioned by azd)
     • App Gateway operational state: Running
 
@@ -96,7 +96,7 @@ function Invoke-ApimListSecrets([string]$subName) {
 $BRONZE_KEY   = Invoke-ApimListSecrets 'app-branch-advisor'
 $SILVER_KEY   = Invoke-ApimListSecrets 'app-aml-screening'
 $SILVER_KEY_2 = Invoke-ApimListSecrets 'app-credit-underwriting'
-$GOLD_KEY     = Invoke-ApimListSecrets 'Investment-Platform'
+$GOLD_KEY     = Invoke-ApimListSecrets 'app-investment-platform'
 
 Write-Host "  Bronze key (Branch Advisor):        $($BRONZE_KEY.Substring(0,8))... (60 RPM — sustained only)" -ForegroundColor Green
 Write-Host "  Silver key (AML Screening):         $($SILVER_KEY.Substring(0,8))... (300 RPM — blast safe)" -ForegroundColor Green
@@ -172,7 +172,7 @@ if (-not $testExists) {
 Write-Host ""
 Write-Host "=== Step 4: Upload test support files ===" -ForegroundColor Cyan
 
-# system.properties — trustStore=NONE for AppGW self-signed cert
+# appgw-system.properties — references the PKCS12 truststore (used if truststore is present)
 $sysPropsPath = "$repoRoot\tests\appgw-system.properties"
 if (Test-Path $sysPropsPath) {
     az load test file upload `
@@ -181,6 +181,18 @@ if (Test-Path $sysPropsPath) {
         --path $sysPropsPath `
         --file-type ADDITIONAL_ARTIFACTS -o none
     Write-Host "  Uploaded appgw-system.properties" -ForegroundColor Green
+}
+
+# system.properties — JMeter auto-reads this at startup; trustStore=NONE trusts the
+# App Gateway self-signed cert without needing the PKCS12 truststore file.
+$sysPropsPath2 = "$repoRoot\tests\system.properties"
+if (Test-Path $sysPropsPath2) {
+    az load test file upload `
+        --load-test-resource $ALT_RESOURCE -g $ALT_RG `
+        --test-id $TEST_ID `
+        --path $sysPropsPath2 `
+        --file-type ADDITIONAL_ARTIFACTS -o none
+    Write-Host "  Uploaded system.properties (trustStore=NONE)" -ForegroundColor Green
 }
 
 # user.properties — both keys injected as USER_PROPERTIES so JMeter resolves

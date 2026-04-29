@@ -1,0 +1,350 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  JMeter 5.6 Load Test Plan: AI-as-a-Service — App Gateway Failover Blast
+  ========================================================================
+
+  PURPOSE
+  =======
+  Proves that the APIM circuit-breaker / failover-retry policy works end-to-end
+  through the App Gateway WAF.  Drives enough TPM through a single Silver
+  subscription to saturate the primary Foundry instance (East US, capped at 1K TPM
+  for this test), forcing APIM to retry on the secondary (West US).
+
+  Traffic path:
+    JMeter → AppGW WAF v2 (HTTPS 443) → APIM openai-inference API →
+      primary Foundry East US (1K TPM cap) → 429 → APIM <choose> → secondary Foundry West US
+      X-Backend-Region-Used: secondary-failover
+
+  TEST SUITES
+  ===========
+  Suite 1  [Silver Blast] — 20 threads, 3s think, 120s, max_tokens=20
+    → ~400 RPM, ~8K TPM >> 1K primary cap → rapid Foundry 429 → APIM failover
+    Silver product cap: 300 RPM / 5K TPM (APIM-level).
+    Primary Foundry is capped at 1K TPM for this test via configure-load-test.ps1.
+    APIM transparent retry → client sees 200 throughout; X-Backend-Region-Used flips to secondary.
+
+  Expected outcome:
+    >0% of requests served from secondary-failover within first 30s.
+    0 client-visible errors (APIM absorbs all 429s).
+    tearDown reports failover% (>50% expected after primary saturates).
+
+  ASSERTIONS
+  ==========
+  Assert HTTP 200 (APIM retry must shield client from 429).
+  X-Backend-Region-Used extracted per request.
+  tearDown reports Silver failover count and percentage.
+
+  PREREQUISITES (Azure Load Testing env vars)
+  ============================================
+    APIM_HOSTNAME  = agw-contoso-ai-primary.eastus.cloudapp.azure.com
+    API_VERSION    = 2024-10-21
+    SILVER_KEY     = <silver-test subscription key>
+
+  Additional uploaded files:
+    appgw-system.properties  — trustStore=NONE (re-used for AppGW self-signed cert)
+
+  POLICY REQUIREMENT
+  ==================
+  policies/apim/failover-retry.xml must be active on openai-inference API.
+  Primary gpt-4o-mini PTU/standard deployment must be capped at 1K TPM.
+  Both set by configure-load-test.ps1 (run via azd postprovision hook).
+-->
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan"
+              testname="AI-as-a-Service — App Gateway Failover Blast" enabled="true">
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments"
+                   guiclass="ArgumentsPanel" testclass="Arguments">
+        <collectionProp name="Arguments.arguments">
+          <elementProp name="APIM_HOSTNAME" elementType="Argument">
+            <stringProp name="Argument.name">APIM_HOSTNAME</stringProp>
+            <stringProp name="Argument.value">${__P(APIM_HOSTNAME,agw-contoso-ai-primary.eastus.cloudapp.azure.com)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="API_VERSION" elementType="Argument">
+            <stringProp name="Argument.name">API_VERSION</stringProp>
+            <stringProp name="Argument.value">${__P(API_VERSION,2024-10-21)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="SILVER_KEY" elementType="Argument">
+            <stringProp name="Argument.name">SILVER_KEY</stringProp>
+            <stringProp name="Argument.value">${__P(SILVER_KEY,)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+        </collectionProp>
+      </elementProp>
+    </TestPlan>
+    <hashTree>
+
+      <!-- ================================================================= -->
+      <!-- setUp: SSL trust-all + failover counters                          -->
+      <!-- ================================================================= -->
+      <SetupThreadGroup guiclass="SetupThreadGroupGui" testclass="SetupThreadGroup"
+                        testname="[Setup] SSL trust-all + failover counters" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">stoptest</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <intProp name="LoopController.loops">1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">1</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">0</stringProp>
+      </SetupThreadGroup>
+      <hashTree>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler"
+                       testname="Trust-all SSL + failover counters" enabled="true">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="script">
+import javax.net.ssl.*
+import java.security.*
+import java.security.cert.X509Certificate
+
+System.setProperty("javax.net.ssl.trustStore",         "NONE")
+System.setProperty("javax.net.ssl.trustStoreType",     "JKS")
+System.setProperty("javax.net.ssl.trustStorePassword", "")
+
+try {
+    def sslManager = Class.forName("org.apache.jmeter.util.SSLManager")
+                          .getDeclaredMethod("getInstance").invoke(null)
+    def ctxField = Class.forName("org.apache.jmeter.util.JsseSSLManager")
+                        .getDeclaredField("defaultContext")
+    ctxField.setAccessible(true)
+    ctxField.set(sslManager, null)
+    log.info("[SSL] JsseSSLManager.defaultContext reset — trust-all active")
+} catch (Exception e) {
+    log.info("[SSL] JsseSSLManager reset skipped: " + e.message)
+}
+
+def trustAll = [
+    checkClientTrusted: { chain, authType -> },
+    checkServerTrusted: { chain, authType -> },
+    getAcceptedIssuers: { [] as X509Certificate[] }
+] as X509TrustManager
+
+def sc = SSLContext.getInstance("TLS")
+sc.init(null, [trustAll] as TrustManager[], new SecureRandom())
+SSLContext.setDefault(sc)
+HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory())
+HttpsURLConnection.setDefaultHostnameVerifier({ hostname, session -> true } as HostnameVerifier)
+log.info("[SSL] Trust-all installed for AppGW self-signed cert.")
+
+props.put("silverPrimary",  new java.util.concurrent.atomic.AtomicInteger(0))
+props.put("silverFailover", new java.util.concurrent.atomic.AtomicInteger(0))
+
+['SILVER_KEY', 'APIM_HOSTNAME', 'API_VERSION'].each { varName ->
+    def current = props.get(varName)
+    if (current != null &amp;&amp; current.length() &gt; 0) {
+        log.info("[Config] " + varName + " already set (len=" + current.length() + ")")
+    } else {
+        def fromEnv = System.getenv(varName)
+        if (fromEnv != null &amp;&amp; fromEnv.length() &gt; 0) {
+            props.put(varName, fromEnv)
+            log.info("[Config] " + varName + " loaded from OS env")
+        } else {
+            log.warn("[Config] " + varName + " MISSING — test will fail!")
+        }
+    }
+}
+log.info("[Setup] AppGW failover blast ready. 20 Silver threads — will saturate primary at 1K TPM.")
+          </stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+      </hashTree>
+
+      <!-- ================================================================= -->
+      <!-- Suite 1: Silver Blast — 20 threads, 3s think, 120s               -->
+      <!-- ~400 RPM, ~8K TPM >> 1K Foundry primary cap                      -->
+      <!-- APIM retry absorbs 429; client sees 200 throughout                -->
+      <!-- ================================================================= -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup"
+                   testname="[Silver] Failover Blast — gpt-4o-mini" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">true</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">20</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">10</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">120</stringProp>
+        <stringProp name="ThreadGroup.delay">0</stringProp>
+      </ThreadGroup>
+      <hashTree>
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager"
+                       testname="Silver Auth headers" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="Ocp-Apim-Subscription-Key" elementType="Header">
+              <stringProp name="Header.name">Ocp-Apim-Subscription-Key</stringProp>
+              <stringProp name="Header.value">${SILVER_KEY}</stringProp>
+            </elementProp>
+            <elementProp name="Content-Type" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="Accept" elementType="Header">
+              <stringProp name="Header.name">Accept</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="User-Agent" elementType="Header">
+              <stringProp name="Header.name">User-Agent</stringProp>
+              <stringProp name="Header.value">Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer"
+                       testname="Think Time 3s" enabled="true">
+          <stringProp name="ConstantTimer.delay">3000</stringProp>
+        </ConstantTimer>
+        <hashTree/>
+
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
+                          testname="[Silver Blast] POST chat/completions" enabled="true">
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"Reply with one word: Hello"}],"max_tokens":20}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">${APIM_HOSTNAME}</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <stringProp name="HTTPSampler.path">/openai/deployments/gpt-4o-mini/chat/completions?api-version=${API_VERSION}</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion"
+                             testname="Assert 200" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49586">200</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Silver blast must see 200 — APIM retry must absorb all Foundry 429s</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">8</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+
+          <RegexExtractor guiclass="RegexExtractorGui" testclass="RegexExtractor"
+                          testname="Extract X-Backend-Region-Used" enabled="true">
+            <stringProp name="RegexExtractor.useHeaders">true</stringProp>
+            <stringProp name="RegexExtractor.refname">backendRegion</stringProp>
+            <stringProp name="RegexExtractor.regex">X-Backend-Region-Used: (.+?)[\r\n]</stringProp>
+            <stringProp name="RegexExtractor.template">$1$</stringProp>
+            <stringProp name="RegexExtractor.default">primary</stringProp>
+            <stringProp name="RegexExtractor.match_no">1</stringProp>
+          </RegexExtractor>
+          <hashTree/>
+
+          <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor"
+                               testname="Track Silver failover counter" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="script">
+def region = vars.get("backendRegion") ?: "primary"
+if (region.contains("secondary")) {
+    props.get("silverFailover").incrementAndGet()
+} else {
+    props.get("silverPrimary").incrementAndGet()
+}
+            </stringProp>
+          </JSR223PostProcessor>
+          <hashTree/>
+        </hashTree>
+      </hashTree>
+
+      <!-- ================================================================= -->
+      <!-- tearDown: Failover percentage report                              -->
+      <!-- >0% failover = PASS; 0% = failover policy not firing             -->
+      <!-- ================================================================= -->
+      <PostThreadGroup guiclass="PostThreadGroupGui" testclass="PostThreadGroup"
+                       testname="[tearDown] Failover percentage report" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <intProp name="LoopController.loops">1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">1</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">0</stringProp>
+      </PostThreadGroup>
+      <hashTree>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler"
+                       testname="[Summary] Failover percentage" enabled="true">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="script">
+def sp = (props.get("silverPrimary")  as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+def sf = (props.get("silverFailover") as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+def total = sp + sf
+def pct = total > 0 ? (sf * 100.0 / total).round(1) : 0.0
+
+def status
+if (total == 0) {
+    status = "NO REQUESTS — check SILVER_KEY and APIM_HOSTNAME"
+} else if (sf == 0) {
+    status = "INVESTIGATE — failover policy not firing (0% failover at 8K TPM blast)\n" +
+             "  Check: 1) failover-retry.xml active on openai-inference API\n" +
+             "          2) Primary Foundry capped at 1K TPM for this test\n" +
+             "          3) run configure-load-test.ps1 to reset test env vars"
+} else {
+    status = "PASS — failover policy firing (${pct}% of requests via secondary)"
+}
+
+def msg = """
+=== APP GATEWAY FAILOVER BLAST RESULTS ===
+
+  [Silver Blast]  total=${total}  primary=${sp}  failover=${sf}  failover%=${pct}%
+
+  Status: ${status}
+
+  Expected: >50% failover after primary Foundry saturates (~30s into test).
+  0% failover = policy not active or primary not capped at 1K TPM.
+  100% failover = primary fully saturated (normal for sustained blast).
+
+==========================================
+"""
+log.info(msg)
+SampleResult.setResponseData(msg, "UTF-8")
+SampleResult.setResponseCodeOK()
+SampleResult.setSampleLabel("Failover — total=${total}  primary=${sp}  failover=${sf}  (${pct}%)")
+          </stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+      </hashTree>
+
+      <!-- Summary Report -->
+      <ResultCollector guiclass="SummaryReport" testclass="ResultCollector"
+                       testname="Summary Report" enabled="true">
+        <boolProp name="ResultCollector.error_logging">false</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration">
+            <time>true</time>
+            <latency>true</latency>
+            <timestamp>true</timestamp>
+            <success>true</success>
+            <label>true</label>
+            <code>true</code>
+            <message>true</message>
+            <threadName>true</threadName>
+            <bytes>true</bytes>
+            <connectTime>true</connectTime>
+          </value>
+        </objProp>
+        <stringProp name="filename"></stringProp>
+      </ResultCollector>
+      <hashTree/>
+
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>

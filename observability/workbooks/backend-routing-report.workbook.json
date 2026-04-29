@@ -6,7 +6,7 @@
       "content": {
         "version": "KqlParameterItem/1.0",
         "crossComponentResources": [
-          "/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
         ],
         "parameters": [
           {
@@ -69,7 +69,7 @@
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
         "crossComponentResources": [
-          "/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
         ],
         "visualization": "tiles",
         "tileSettings": {
@@ -101,7 +101,7 @@
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
         "crossComponentResources": [
-          "/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
         ],
         "visualization": "areachart",
         "chartSettings": {
@@ -127,13 +127,13 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "ApiManagementGatewayLogs\n| where TimeGenerated {TimeRange}\n| where isnotempty(BackendUrl)\n| extend BackendRegion = iff(BackendUrl has \"primary\", \"primary\", iff(BackendUrl has \"secondary\", \"secondary\", \"other\"))\n| sort by TimeGenerated asc\n| extend PrevRegion = prev(BackendRegion, 1, \"\")\n| where BackendRegion != PrevRegion and PrevRegion != \"\"\n| extend Direction = case(\n    PrevRegion == \"primary\"   and BackendRegion == \"secondary\", \"🔴 Failover: primary → secondary\",\n    PrevRegion == \"secondary\" and BackendRegion == \"primary\",   \"🟢 Recovery: secondary → primary\",\n    strcat(PrevRegion, \" → \", BackendRegion))\n| project\n    TimeGenerated,\n    Direction,\n    ResponseCode,\n    BackendResponseCode,\n    ['TotalTime (ms)']   = TotalTime,\n    ['BackendTime (ms)'] = BackendTime,\n    LastErrorReason,\n    LastErrorMessage,\n    ApimSubscriptionId\n| order by TimeGenerated desc",
+        "query": "ApiManagementGatewayLogs\n| where TimeGenerated {TimeRange}\n| where isnotempty(BackendUrl)\n| extend BackendRegion = iff(BackendUrl has \"primary\", \"primary\", iff(BackendUrl has \"secondary\", \"secondary\", \"other\"))\n| sort by TimeGenerated asc\n| extend PrevRegion = prev(BackendRegion, 1, \"\")\n| where BackendRegion != PrevRegion and PrevRegion != \"\"\n| extend Direction = case(\n    PrevRegion == \"primary\"   and BackendRegion == \"secondary\" and (ResponseCode == 429 or ResponseCode >= 500), \"🔴 Failover: primary → secondary (error re-routed)\",\n    PrevRegion == \"primary\"   and BackendRegion == \"secondary\", \"🔴 Failover: primary → secondary\",\n    PrevRegion == \"secondary\" and BackendRegion == \"primary\"   and (ResponseCode == 429 or ResponseCode >= 500), \"🟡 Recovery attempt: secondary → primary (failed — re-tripped)\",\n    PrevRegion == \"secondary\" and BackendRegion == \"primary\",   \"🟢 Recovery: secondary → primary (successful)\",\n    strcat(PrevRegion, \" → \", BackendRegion))\n| project\n    TimeGenerated,\n    Direction,\n    ResponseCode,\n    BackendResponseCode,\n    ['TotalTime (ms)']   = TotalTime,\n    ['BackendTime (ms)'] = BackendTime,\n    LastErrorReason,\n    LastErrorMessage,\n    ApimSubscriptionId\n| order by TimeGenerated desc",
         "size": 0,
         "title": "Backend Switch Events",
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
         "crossComponentResources": [
-          "/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
         ],
         "visualization": "table",
         "gridSettings": {
@@ -200,7 +200,7 @@
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
         "crossComponentResources": [
-          "/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
         ],
         "visualization": "barchart",
         "chartSettings": {
@@ -224,7 +224,7 @@
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
         "crossComponentResources": [
-          "/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
         ],
         "visualization": "linechart",
         "chartSettings": {
@@ -256,7 +256,7 @@
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
         "crossComponentResources": [
-          "/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
         ],
         "visualization": "linechart",
         "chartSettings": {
@@ -283,7 +283,7 @@
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
         "crossComponentResources": [
-          "/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
         ],
         "visualization": "linechart",
         "chartSettings": {
@@ -314,7 +314,7 @@
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
         "crossComponentResources": [
-          "/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
         ],
         "visualization": "table",
         "gridSettings": {
@@ -375,7 +375,7 @@
     }
   ],
   "defaultResourceIds": [
-    "/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+    "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
   ],
   "$schema": "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json"
 }

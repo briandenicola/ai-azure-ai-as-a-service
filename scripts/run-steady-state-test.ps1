@@ -93,7 +93,7 @@ function Invoke-ApimListSecrets([string]$subName) {
 $BRONZE_KEY   = Invoke-ApimListSecrets 'app-branch-advisor'
 $SILVER_KEY   = Invoke-ApimListSecrets 'app-aml-screening'
 $SILVER_KEY_2 = Invoke-ApimListSecrets 'app-credit-underwriting'
-$GOLD_KEY     = Invoke-ApimListSecrets 'Investment-Platform'
+$GOLD_KEY     = Invoke-ApimListSecrets 'app-investment-platform'
 
 Write-Host "  Bronze key (Branch Advisor):        $($BRONZE_KEY.Substring(0,8))..." -ForegroundColor Green
 Write-Host "  Silver key (AML Screening):         $($SILVER_KEY.Substring(0,8))..." -ForegroundColor Green
@@ -177,6 +177,18 @@ if (Test-Path $sysPropsPath) {
         --path $sysPropsPath `
         --file-type ADDITIONAL_ARTIFACTS -o none
     Write-Host "  Uploaded appgw-system.properties" -ForegroundColor Green
+}
+
+# system.properties — JMeter auto-reads this at startup; trustStore=NONE trusts the
+# App Gateway self-signed cert without needing the PKCS12 truststore file.
+$sysPropsPath2 = "$repoRoot\tests\system.properties"
+if (Test-Path $sysPropsPath2) {
+    az load test file upload `
+        --load-test-resource $ALT_RESOURCE -g $ALT_RG `
+        --test-id $TEST_ID `
+        --path $sysPropsPath2 `
+        --file-type ADDITIONAL_ARTIFACTS -o none
+    Write-Host "  Uploaded system.properties (trustStore=NONE)" -ForegroundColor Green
 }
 
 $userPropsPath = "$env:TEMP\steady-state-user.properties"

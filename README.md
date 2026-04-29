@@ -89,8 +89,9 @@ The first `azd provision` runs an interactive setup wizard that prompts for:
 | Deploy RBAC assignments | Yes | Grants APIM managed identity Cognitive Services User on Foundry |
 | Deploy ACI jumpbox | Yes | VNet-internal container for dev/test access to APIM |
 | Deploy Function App | Yes | Event Grid automation handler |
-| Deploy Load Testing | No | Azure Load Testing resource |
 | SSL cert Key Vault secret ID | _(blank)_ | Leave blank to skip App Gateway WAF; add later with `azd provision` |
+
+> **Azure Load Testing is always deployed.** All 5 test definitions are created automatically by the postprovision hook — this is not a prompted option and cannot be skipped.
 
 Re-runs skip any variable already set in the environment — the wizard only prompts for missing values.
 
@@ -106,7 +107,6 @@ azd env set AZURE_DEPLOYING_USER_OBJECT_ID (az ad signed-in-user show --query id
 azd env set AZURE_DEPLOY_RBAC true
 azd env set AZURE_DEPLOY_JUMPBOX true
 azd env set AZURE_DEPLOY_FUNCTION_APP true
-azd env set AZURE_DEPLOY_LOAD_TEST false
 azd provision --no-prompt
 azd deploy
 ```
@@ -125,62 +125,97 @@ azd deploy
 | **Managed Grafana** | Token usage + performance dashboards |
 | **Function App** (Flex Consumption) | APIM subscription event handler via Event Grid |
 | **ACI Jumpbox** | Linux container in VNet for testing APIM from inside the network |
+| **Azure Load Testing** | 5 test definitions pre-configured with APIM subscription keys, SSL bypass, and correct endpoints — ready to fire immediately |
 
 ### Testing the deployment
 
-Connect to the jumpbox:
+#### Why you need the jumpbox
+
+APIM runs in **Internal VNet mode** — it has no public IP. Foundry sits behind **private endpoints** with `publicNetworkAccess: Disabled`. This means:
+
+- The Azure Portal's Foundry blade (Agents, Playgrounds) cannot reach the data plane from your browser — this is expected and intentional.
+- Direct `curl` or SDK calls from your laptop to the APIM gateway URL will time out unless App Gateway WAF is deployed.
+- The **ACI jumpbox** is a lightweight Linux container (`aci-contoso-jumpbox`) deployed *inside* the same VNet. It can reach APIM's internal IP and is the correct tool for verifying the deployment, running smoke tests, and interacting with Foundry agents during development.
+
+In production, all external traffic enters via the **App Gateway WAF**, which is the only path from the internet to APIM.
+
+#### Connect to the jumpbox
 
 ```powershell
-az container exec -g rg-contoso-ai-platform-dev -n aci-contoso-jumpbox --exec-command /bin/sh
+# Resolve names from your azd environment
+$RG   = (azd env get-values | Select-String 'AZURE_RESOURCE_GROUP').ToString().Split('=')[1].Trim('"')
+$APIM = az apim list -g $RG --query '[0].name' -o tsv
+
+az container exec -g $RG -n aci-contoso-jumpbox --exec-command /bin/sh
 ```
 
 Then from inside the container:
 
 ```sh
+APIM_NAME="<apim-name>"   # paste value from above
+BRONZE_KEY="<bronze-key>" # see key retrieval below
+
 # OpenAI-compatible surface
 curl -s -X POST \
-  "https://<apim-name>.azure-api.net/openai/deployments/gpt-4o-mini/chat/completions?api-version=2024-02-01" \
+  "https://${APIM_NAME}.azure-api.net/openai/deployments/gpt-4o-mini/chat/completions?api-version=2024-02-01" \
   -H "Content-Type: application/json" \
-  -H "Ocp-Apim-Subscription-Key: <bronze-key>" \
+  -H "Ocp-Apim-Subscription-Key: ${BRONZE_KEY}" \
   -d '{"messages":[{"role":"user","content":"Hello"}],"max_tokens":20}'
 
 # Native model inference surface
 curl -s -X POST \
-  "https://<apim-name>.azure-api.net/models/chat/completions" \
+  "https://${APIM_NAME}.azure-api.net/models/chat/completions" \
   -H "Content-Type: application/json" \
-  -H "Ocp-Apim-Subscription-Key: <bronze-key>" \
+  -H "Ocp-Apim-Subscription-Key: ${BRONZE_KEY}" \
   -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Hello"}],"max_tokens":20}'
 ```
 
-Retrieve subscription keys:
+#### Retrieve subscription keys
 
 ```powershell
-# Bronze key
-az apim subscription show --service-name <apim-name> -g rg-contoso-ai-platform-dev --subscription-id bronze-test --query primaryKey -o tsv
+$RG   = (azd env get-values | Select-String 'AZURE_RESOURCE_GROUP').ToString().Split('=')[1].Trim('"')
+$APIM = az apim list -g $RG --query '[0].name' -o tsv
 
-# Silver key
-az apim subscription show --service-name <apim-name> -g rg-contoso-ai-platform-dev --subscription-id silver-test --query primaryKey -o tsv
+# Bronze key (app-branch-advisor LOB)
+az apim subscription show --service-name $APIM -g $RG --subscription-id app-branch-advisor --query primaryKey -o tsv
+
+# Silver key (app-aml-screening LOB)
+az apim subscription show --service-name $APIM -g $RG --subscription-id app-aml-screening --query primaryKey -o tsv
 ```
 
 ---
 
 ## Load Testing
 
-All load tests require `AZURE_DEPLOY_LOAD_TEST=true` at provision time and route traffic through the App Gateway WAF → APIM → Foundry path.  
-Run any script from the repo root — it will resolve all resource names automatically from your `azd` environment.
+All five load test definitions are **created automatically by `azd provision`** — no manual setup needed. The postprovision hook (`scripts/configure-load-test.ps1`) runs unconditionally and registers every test definition in Azure Load Testing, injects the correct APIM subscription keys, and uploads the SSL bypass files. After `azd provision && azd deploy` every test is ready to fire immediately.
+
+All tests route traffic through App Gateway WAF → APIM → Foundry. Run any script from the repo root — it will resolve all resource names automatically from your `azd` environment.
+
+### Adding a new load test
+
+1. Add your JMX file to `tests/`.
+2. Add a `Register-AltTest` call in `scripts/configure-load-test.ps1` (the single owner of all test definitions).
+3. Add a `run-<name>.ps1` script that only fires the run (does not create the definition).
+4. Run `azd provision` — the new test definition will be created automatically.
 
 ### Test scripts
 
 | Script | ALT test ID | Duration | What it proves |
 |---|---|---|---|
-| `scripts/run-failover-test.ps1` | `appgw-failover-test` | ~2 min | Circuit breaker fires and APIM transparently retries on secondary Foundry |
+| `scripts/run-apim-smoke-test.ps1` | `apim-smoke-test` | ~2 min | Direct APIM smoke test — validates the internal VNet path (no App Gateway) is healthy |
+| `scripts/run-appgw-failover-test.ps1` | `appgw-failover-test` | ~2 min | Circuit breaker fires and APIM transparently retries on secondary Foundry |
 | `scripts/run-multi-sub-failover-test.ps1` | `multi-sub-failover-test` | ~2 min | Bronze **and** Silver subscriptions both fail over independently under shared TPM pressure |
 | `scripts/run-steady-state-test.ps1` | `steady-state-test` | 1 hour | All four LOB subscriptions produce smooth baseline traffic — no throttling, no gaps in dashboards |
-| `scripts/run-appgw-load-test.ps1` | `appgw-smoke-test` | ~5 min | Measures WAF inspection overhead vs the direct-APIM baseline latency (~10–30 ms expected) |
+| `scripts/run-appgw-smoke-test.ps1` | `appgw-smoke-test` | ~5 min | Measures WAF inspection overhead vs the direct-APIM baseline latency (~10–30 ms expected) |
 
 ### Choosing the right test
 
-- **Validating the failover policy after a change** → `run-failover-test.ps1`  
+- **Verifying the deployment is healthy** → `run-apim-smoke-test.ps1`  
+  Hits APIM directly over the internal VNet path (no App Gateway). This is the fastest way to confirm gpt-4o-mini is reachable and the Bronze/Silver subscription keys are valid. Run this immediately after `azd provision && azd deploy`.
+
+> **`run-load-test.ps1`** is an interactive launcher that presents all 5 tests with descriptions and recommendations — useful when you’re not sure which test to run.
+
+- **Validating the failover policy after a change** → `run-appgw-failover-test.ps1`  
   Deliberately exhausts the primary Foundry TPM cap and confirms every request still returns HTTP 200 via the secondary, with `X-Backend-Region-Used: secondary-failover` in the response.
 
 - **Proving multi-LOB isolation** → `run-multi-sub-failover-test.ps1`  
@@ -190,7 +225,7 @@ Run any script from the repo root — it will resolve all resource names automat
   Sends ~160 TPM across four LOB subscriptions for one hour — well under the 1K TPM cap so no failover occurs. Run this overnight to generate realistic traffic for Grafana and the App Insights workbook.  
   Can run **concurrently** with `run-multi-sub-failover-test.ps1` (different ALT test ID).
 
-- **Measuring App Gateway WAF overhead** → `run-appgw-load-test.ps1`  
+- **Measuring App Gateway WAF overhead** → `run-appgw-smoke-test.ps1`  
   Compares AppGW-path latency against the stored direct-APIM baseline. Use after updating WAF rules or upgrading the App Gateway SKU to confirm the overhead stays within acceptable bounds.
 
 ### Reading the results
@@ -469,10 +504,8 @@ Two workbooks are automatically deployed by `azd provision` into `rg-contoso-ai-
 | [Backend Routing Report](#backend-routing-report) | `AppGW → APIM → Foundry Backend Routing Report` | `ApiManagementGatewayLogs`, `AGWAccessLogs` | Aggregate — trends over time |
 | [End-to-End Trace](#end-to-end-trace) | `AppGW → APIM → Foundry End-to-End Trace` | `AGWAccessLogs`, `AppRequests`, `AppDependencies` | Per-request — individual trace rows |
 
-Direct portal links (subscription `d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e`, RG `rg-contoso-ai-platform-dev`):
-
-- **Backend Routing Report:** `https://portal.azure.com/#@/resource/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.Insights/workbooks/f6a2a80c-3c54-5228-ab1b-9048be9070d7/workbook`
-- **End-to-End Trace:** `https://portal.azure.com/#@/resource/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.Insights/workbooks/0c7761cb-52f4-5a25-8156-e7e499c4d2fc/workbook`
+After `azd provision`, find your workbooks in the Azure portal:
+**Azure Monitor → Workbooks** — filter by your resource group (`rg-contoso-ai-platform-<env>`). Both workbooks appear with their display names.
 
 #### Backend Routing Report
 
@@ -486,7 +519,7 @@ Direct portal links (subscription `d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e`, RG `rg
 |---|---|
 | **Traffic Summary** (KPI tiles) | Total requests, primary-backend count, secondary-backend count, APIM-rejected count (i.e. rate-limited before reaching a backend) |
 | **Requests per Backend** (area chart) | Timeline of request volume split by Primary (East US) vs Secondary (West US) vs No-backend — lets you see the moment primary saturation kicks in and traffic shifts to secondary |
-| **Backend Switch Events** (table) | Each individual transition between primary and secondary, with direction (`🔴 Failover: primary → secondary` or `🟢 Recovery: secondary → primary`) and timestamp — useful for measuring how long a failover episode lasted |
+| **Backend Switch Events** (table) | Each individual transition between primary and secondary. Direction labels: `🔴 Failover: primary → secondary (error re-routed)` — primary returned 429/5xx and breaker tripped; `🔴 Failover: primary → secondary` — mid-request retry succeeded on secondary; `🟡 Recovery attempt: secondary → primary (failed — re-tripped)` — breaker reset timer fired but primary rejected with 429/5xx and immediately re-tripped; `🟢 Recovery: secondary → primary (successful)` — primary healthy again. Useful for measuring how long a failover episode lasted and distinguishing genuine recoveries from flapping. |
 | **Primary Backend Failures per Minute** (line chart) | 429 + 5xx count from the primary backend only, overlaid with a reference line at the circuit-breaker threshold (5 failures/min) |
 | **Error Rate % by Backend** (line chart) | Error percentage per minute split by primary vs secondary — shows whether the secondary is clean after a failover |
 | **Full Chain Latency: AppGW → APIM → Foundry — P50 and P90** (line chart) | End-to-end wall-clock latency as seen by App Gateway, sampled at P50 and P90. Derived from `AGWAccessLogs.timeTaken` joined to APIM backend time |
@@ -529,225 +562,7 @@ Outputs 6 sections: APIM request breakdown, Foundry dependency calls, APIM overh
 
 ## PCI DSS v4.0 Compliance
 
-This section documents every Azure service required to operate AI Foundry models and agents in a PCI DSS v4.0 compliant configuration.
-
-> **Architecture pattern  Tokenize-then-infer.** Callers must tokenize raw PANs in a PCI-scoped vault **before** calling APIM. AI model backends (Foundry, OpenAI) are outside the Cardholder Data Environment (CDE) and must never receive raw cardholder data.
-
-### Architecture Overview
-
-```mermaid
-graph TB
-    subgraph Internet[" Public Internet"]
-        Client[" PCI Client App\n(tokenizes PANs first)"]
-    end
-
-    subgraph GlobalWAF[" Global Entry  Azure Front Door WAF (PCI Req 6.4)"]
-        FD["Azure Front Door Standard Premium\nGlobal CDN  First WAF layer\nDDoS  Geo-filtering  Bot protection"]
-    end
-
-    subgraph WAFLayer[" Regional WAF  App Gateway WAF v2 (PCI Req 6.4 / 6.5.4)"]
-        AppGW_E["App Gateway WAF v2\nEast US  Prevention Mode  OWASP CRS 3.2"]
-        AppGW_W["App Gateway WAF v2\nWest US  Prevention Mode  OWASP CRS 3.2"]
-    end
-
-    subgraph APIMLayer[" CDE Boundary  APIM Premium (Internal VNet)"]
-        APIM["Azure API Management\nPremium SKU  Internal Mode"]
-        Policy1["pci-dss-cardholder-data-protection.xml\nPAN regex block  CVV block  Response masking"]
-        Policy2["pci-dss-audit-logging.xml\nStructured CHD-free audit events"]
-    end
-
-    subgraph Identity[" Identity and Secrets  PCI Req 3.5, 8"]
-        KV["Azure Key Vault HSM\nCMK  90-day rotation"]
-        MI["Managed Identity\nSystem-assigned to APIM"]
-    end
-
-    subgraph Logging[" Audit and Monitoring  PCI Req 10"]
-        EH["Azure Event Hub\nReal-time audit stream"]
-        LA["Log Analytics Workspace\n395-day retention  Immutable"]
-        AI["Application Insights"]
-    end
-
-    subgraph AIBackend[" AI Backends (Outside CDE  no raw CHD)"]
-        Foundry["Azure AI Foundry\nAgents  Model Hub  Evaluations"]
-    end
-
-    Client -->|HTTPS only| FD
-    FD -->|WAF-filtered  geo-routed| AppGW_E
-    FD -->|WAF-filtered  failover| AppGW_W
-    AppGW_E -->|WAF-filtered  private IP| APIM
-    AppGW_W -->|WAF-filtered  private IP| APIM
-    APIM --> Policy1
-    APIM --> Policy2
-    Policy2 -->|Audit events| EH
-    EH -->|Ingest| LA
-    APIM -->|Telemetry| AI
-    MI -->|Authenticate| KV
-    APIM -->|Private endpoint  VNet| Foundry
-```
-
-### Required Services
-
-#### 1. Azure API Management (Premium SKU)
-
-| Attribute | Value |
-|---|---|
-| **SKU** | Premium  required for Internal VNet mode |
-| **VNet Mode** | Internal  APIM has no public inbound interface |
-| **TLS** | 1.2 minimum; TLS 1.0/1.1/SSL 3.0 disabled via `customProperties` |
-| **Encryption** | Customer-managed key (CMK) from Key Vault HSM |
-| **Identity** | System-assigned managed identity (no stored credentials) |
-| **PCI Policies** | `pci-dss-cardholder-data-protection.xml`, `pci-dss-audit-logging.xml` |
-| **PCI Product** | `ai-gold`  approval required, 1 subscription per consumer (Req 7) |
-| **PCI Requirements** | Req 1.3, 3.4, 3.5, 4.2.1, 6.4, 7, 8, 10 |
-
->  `semantic-caching.xml` and body-logging policies **must not** be applied to PCI-scoped operations.
-
-#### 2. Azure AI Foundry
-
-| Attribute | Value |
-|---|---|
-| **Network** | Private endpoint only; `publicNetworkAccess: Disabled` |
-| **Auth** | APIM managed identity; no API keys distributed |
-| **Thread TTL** | Keep short (15 min) to avoid CHD persisting in agent threads |
-| **Fine-tuning data** | Scan for CHD before upload |
-| **PCI Requirements** | Req 3.3, 7 |
-
-#### 3. Azure Key Vault (HSM-backed)
-
-| Attribute | Value |
-|---|---|
-| **Tier** | Premium  HSM-backed keys required for Req 3.5 |
-| **Key Type** | RSA-HSM 4096-bit or EC-HSM P-384 |
-| **Rotation** | Automatic 90-day policy |
-| **Access** | Private endpoint only |
-| **Auth** | APIM managed identity via `Key Vault Crypto User` RBAC role |
-| **PCI Requirements** | Req 3.5, 3.7 |
-
-#### 4. Virtual Network + Network Security Groups
-
-| Attribute | Value |
-|---|---|
-| **APIM Subnet** | `/27` minimum; APIM service delegation |
-| **NSG Default** | Deny-all inbound and outbound |
-| **NSG Allow-list** | Port 443 inbound from App Gateway subnet only |
-| **NSG Allow-list** | Port 443 outbound to Foundry private endpoints |
-| **NSG Allow-list** | Port 3443 inbound from `ApiManagement` service tag (management plane) |
-| **PCI Requirements** | Req 1.3 |
-
-#### 5. Application Gateway WAF v2 (one per region)
-
-| Attribute | Value |
-|---|---|
-| **WAF Mode** | Prevention  Detection mode does not satisfy Req 6.4 |
-| **Ruleset** | OWASP CRS 3.2 + Microsoft Bot Manager 1.0 |
-| **TLS Policy** | AppGwSslPolicy20220101  TLS 1.2+; disables TLS 1.0/1.1/SSL 3.0 |
-| **SSL Certificate** | Referenced from Key Vault via User-Assigned Managed Identity |
-| **Backend** | APIM internal private IP via VNet  never a public endpoint |
-| **Deployment** | East US (primary) + West US (secondary) |
-| **PCI Requirements** | Req 6.4, 6.5.4 |
-
->  This is the **most commonly missed service** in PCI AI implementations. APIM alone does not satisfy Req 6.4.
-
-#### 5a. Azure Front Door Standard Premium  Global Entry
-
-| Attribute | Value |
-|---|---|
-| **WAF Mode** | Prevention |
-| **Ruleset** | Microsoft_DefaultRuleSet 2.1 + Microsoft_BotManagerRuleSet 1.0 |
-| **Origins** | Regional App Gateway public IPs (East US + West US) |
-| **Routing** | Latency-based to nearest healthy App Gateway |
-| **Custom Rules** | Geo-filtering: restrict to countries where users operate |
-| **DDoS** | Azure DDoS Network Protection included |
-| **Status** | Not yet provisioned  add `waf-frontdoor.bicep` after App Gateways are verified |
-| **PCI Requirements** | Req 6.4, 1.3 |
-
-> **Why not skip App Gateways and route Front Door directly to APIM?** Front Door operates at the Azure edge, outside your VNet. It cannot route to an APIM instance in Internal VNet mode. App Gateways act as the VNet bridge  both layers are required.
-
-#### 6. Azure Event Hub
-
-| Attribute | Value |
-|---|---|
-| **Use** | Audit log streaming only  never request/response bodies |
-| **Auth** | APIM managed identity (`Azure Event Hubs Data Sender`) |
-| **Retention** | 7 days in Event Hub; archived to Log Analytics |
-| **PCI Requirements** | Req 10.2.1, 10.3.1 |
-
-#### 7. Log Analytics Workspace
-
-| Attribute | Value |
-|---|---|
-| **Retention** | 395 days (PCI Req 10.5.1 requires 12 months minimum) |
-| **Immutability** | Enabled  logs cannot be deleted or altered |
-| **Local Auth** | Disabled  Entra ID only |
-| **PCI Requirements** | Req 10.3.1, 10.5.1 |
-
-#### 8. Application Insights
-
-| Attribute | Value |
-|---|---|
-| **Ingestion / Query** | Public network access enabled (required for APIM instrumentation key logger) |
-| **What is captured** | API latency, token counts, HTTP status codes  never prompt/completion content |
-| **PCI Requirements** | Req 10.2, 10.7 |
-
-#### 9. Private Endpoints + Private DNS Zones
-
-| Service | Private DNS Zone |
-|---|---|
-| Key Vault | `privatelink.vaultcore.azure.net` |
-| Log Analytics | `privatelink.ods.opinsights.azure.com` |
-| Azure AI Foundry | `privatelink.cognitiveservices.azure.com` |
-| Event Hub | `privatelink.servicebus.windows.net` |
-
-**PCI Requirements:** Req 1.3, 4.2.1
-
-#### 10. Microsoft Defender for Cloud
-
-| Attribute | Value |
-|---|---|
-| **Plans** | Defender CSPM + Defender for APIs + Defender for Key Vault |
-| **Regulatory Standard** | PCI DSS v4.0 compliance dashboard |
-| **PCI Requirements** | Req 6.3, 11.3 |
-
-#### 11. Azure Policy (Guardrails)
-
-| Policy | Effect | PCI Requirement |
-|---|---|---|
-| Require TLS 1.2+ on APIM | Deny | Req 4.2.1 |
-| Require CMK on APIM | Deny | Req 3.5 |
-| Deny public access to Key Vault | Deny | Req 1.3 |
-| Deny public access to Log Analytics | Deny | Req 10.3.1 |
-| Require Log Analytics retention  395 days | Deny | Req 10.5.1 |
-| Require APIM VNet injection | Deny | Req 1.3 |
-| Enable Defender for Cloud | DeployIfNotExists | Req 6.3, 11.3 |
-
-#### 12. Managed Identity (System-Assigned on APIM)
-
-| Role | Scope |
-|---|---|
-| `Key Vault Crypto User` | Key Vault |
-| `Azure Event Hubs Data Sender` | Event Hub namespace |
-| `Cognitive Services User` | Both Foundry AIServices accounts |
-| `Monitoring Metrics Publisher` | Application Insights |
-
-**PCI Requirements:** Req 8.2, 8.6
-
-### Service Summary
-
-| # | Service | PCI Requirement | Required Config |
-|---|---|---|---|
-| 1 | Azure API Management | Req 1.3, 34, 68, 10 | **Premium**  Internal VNet |
-| 2 | Azure AI Foundry | Req 3.3, 7 | Private endpoint  no public access |
-| 3 | Azure Key Vault | Req 3.5, 3.7 | **Premium (HSM)**  90-day rotation |
-| 4 | Virtual Network + NSG | Req 1.3 | Deny-all + allow-list rules |
-| 5 | App Gateway WAF v2 (2) | Req 6.4, 6.5.4 | **Prevention mode**  East + West US |
-| 5a | Azure Front Door Standard Premium | Req 6.4, 1.3 | Global WAF  geo-filter  DDoS |
-| 6 | Azure Event Hub | Req 10.2.1, 10.3.1 | Audit stream only |
-| 7 | Log Analytics Workspace | Req 10.3.1, 10.5.1 | **395-day retention**  Immutable |
-| 8 | Application Insights | Req 10.2, 10.7 | Workspace-based |
-| 9 | Private Endpoints + DNS | Req 1.3, 4.2.1 | All backend services |
-| 10 | Microsoft Defender for Cloud | Req 6.3, 11.3 | CSPM + Defender for APIs |
-| 11 | Azure Policy | Req 12.3 | Deny-mode guardrails |
-| 12 | Managed Identity | Req 8.2, 8.6 | System-assigned to APIM |
+See [README-pci.md](README-pci.md) for the full PCI DSS v4.0 compliance documentation, including the required service list, architecture overview, policy guardrails, and service summary table.
 
 ---
 
@@ -761,4 +576,4 @@ graph TB
 
 ---
 
-**Last Updated:** March 2026  Maintained by Platform Engineering
+**Last Updated:** April 2026  Maintained by Platform Engineering

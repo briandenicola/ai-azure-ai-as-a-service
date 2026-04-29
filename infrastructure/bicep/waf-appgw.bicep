@@ -55,6 +55,9 @@ param tags object = {}
 @description('Log Analytics workspace resource ID for AppGW diagnostic settings. Pass the same workspace used by APIM diagnostics.')
 param logAnalyticsWorkspaceId string
 
+@description('DNS label for the Public IP. Must be globally unique within the region. Defaults to toLower(appGwName) if not provided. Bicep callers should pass a value that includes a uniqueString suffix.')
+param domainNameLabel string = toLower(appGwName)
+
 // ---------------------------------------------------------------------------
 // Derived values
 // ---------------------------------------------------------------------------
@@ -96,9 +99,10 @@ resource publicIp 'Microsoft.Network/publicIPAddresses@2023-05-01' = {
   properties: {
     publicIPAllocationMethod: 'Static'
     publicIPAddressVersion: 'IPv4'
-    // domainNameLabel required so that dnsSettings.fqdn is populated (used in output)
+    // domainNameLabel required so that dnsSettings.fqdn is populated (used in output).
+    // Passed in from main.bicep as a uniqueString-based value to avoid global DNS conflicts.
     dnsSettings: {
-      domainNameLabel: toLower(appGwName)
+      domainNameLabel: domainNameLabel
     }
   }
 }

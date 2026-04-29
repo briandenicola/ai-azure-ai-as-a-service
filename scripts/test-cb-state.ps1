@@ -3,7 +3,7 @@ Add-Type -TypeDefinition "using System.Net;using System.Security.Cryptography.X5
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 . "$PSScriptRoot/_resolve-env.ps1"
 $silverKey = (az rest --method POST `
-    --uri "$base/subscriptions/silver-test/listSecrets?api-version=2022-08-01" `
+    --uri "$base/subscriptions/app-aml-screening/listSecrets?api-version=2022-08-01" `
     2>$null | ConvertFrom-Json).primaryKey
 $url = "https://$APPGW_FQDN/openai/deployments/gpt-4o-mini/chat/completions?api-version=2024-02-01"
 $b = '{"messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'

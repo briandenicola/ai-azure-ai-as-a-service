@@ -34,17 +34,29 @@ $ErrorActionPreference = 'Stop'
 # KV, APPGW_NAME, APPGW_FQDN all resolved from the live resource group above.
 # Fall back to sensible defaults if resources not yet deployed.
 $KV        = if ($KV_NAME)   { $KV_NAME }   else { throw "No Key Vault found in '$RG'. Run: azd provision" }
-$CERT_NAME = 'appgw-ssl-cert'
+$CERT_NAME = 'appgw-ssl-cert-2'
 # APPGW_NAME resolved by _resolve-env.ps1; derive FQDN from public IP if available.
 # If App Gateway not yet deployed APPGW_NAME / APPGW_FQDN will be empty — that is fine,
 # the cert creation step does not require App Gateway to exist yet.
-$UAMI_NAME = if ($APPGW_NAME) { "$APPGW_NAME-identity" } else {
-    $companyPrefix = if ($companyPrefix) { $companyPrefix } else { 'contoso' }
-    "agw-$companyPrefix-ai-primary-identity"
-}
+# Derive the expected App Gateway name from the Bicep naming convention:
+#   agw-${companyPrefix}-ai-primary  (matches main.bicep appGwName param)
+# This works whether App Gateway is already deployed or not.
+$expectedAppGwName = "agw-$companyPrefix-ai-primary"
+if (-not $APPGW_NAME) { $APPGW_NAME = $expectedAppGwName }
+$UAMI_NAME = "$APPGW_NAME-identity"
+
 # FQDN: use live public IP DNS label if already deployed; otherwise derive from name.
-if (-not $APPGW_FQDN -and $APPGW_NAME) {
-    $APPGW_FQDN = "$APPGW_NAME.$PRIMARY_LOCATION.cloudapp.azure.com"
+# DNS label in Bicep = toLower('${companyPrefix}-ai-gw-${apimNameSuffix}') — globally unique.
+# Extract the suffix from the APIM name: 'apim-contoso-lcjrut5z' -> 'lcjrut5z'
+if (-not $APPGW_FQDN) {
+    if ($APIM_NAME) {
+        $apimSuffix = ($APIM_NAME -replace "^apim-$companyPrefix-", '')
+        $dnsLabel   = "$($companyPrefix.ToLower())-ai-gw-$apimSuffix"
+        $APPGW_FQDN = "$dnsLabel.$PRIMARY_LOCATION.cloudapp.azure.com"
+    } else {
+        # APIM not yet deployed (unlikely in postprovision hook) — use placeholder
+        $APPGW_FQDN = "$($APPGW_NAME.ToLower()).$PRIMARY_LOCATION.cloudapp.azure.com"
+    }
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -61,8 +73,30 @@ Write-Host "  App Gateway    : $APPGW_NAME"
 Write-Host "  UAMI           : $UAMI_NAME"
 Write-Host ""
 
+# ── Step 0 : Grant Key Vault Administrator to the deploying user ──────────────
+# az role assignment create is idempotent — returns existing if already assigned.
+# This is required for a fresh deployment where Bicep hasn't run the RBAC module yet.
+Write-Host "=== Step 0: Grant Key Vault Administrator to deploying user ===" -ForegroundColor Cyan
+$kvId          = az keyvault show --name $KV --resource-group $RG --query id -o tsv
+$deployingUser = az ad signed-in-user show --query id -o tsv 2>$null
+if (-not $deployingUser) {
+    $deployingUser = _Resolve-AzdEnv 'AZURE_DEPLOYING_USER_OBJECT_ID'
+}
+if ($deployingUser) {
+    az role assignment create `
+        --role '00482a5a-887f-4fb3-b363-3b7fe8e74483' `
+        --assignee-object-id $deployingUser `
+        --assignee-principal-type User `
+        --scope $kvId `
+        --only-show-errors -o none 2>$null
+    Write-Host "  KV Administrator assigned (idempotent). Waiting 30s for propagation..."
+    Start-Sleep 30
+} else {
+    Write-Host "  Could not determine deploying user OID — skipping KV Admin grant. Will retry on Forbidden." -ForegroundColor Yellow
+}
+
 # ── Step 1 : Create self-signed certificate in Key Vault ──────────────────────
-Write-Host "=== Step 1: Create self-signed certificate in Key Vault ===" -ForegroundColor Cyan
+Write-Host "=== Step 1: Create self-signed certificate in Key Vault ==" -ForegroundColor Cyan
 
 $policyPath = Join-Path $env:TEMP 'appgw-cert-policy.json'
 @{
@@ -94,7 +128,20 @@ if ($existingCert) {
     Write-Host "  Certificate '$CERT_NAME' already exists — skipping creation." -ForegroundColor Yellow
 } else {
     Write-Host "  Creating certificate (this takes 10-30 seconds)..."
-    az keyvault certificate create --vault-name $KV --name $CERT_NAME --policy "@$policyPath" -o none
+    # Retry up to 10x with 15s back-off to handle RBAC propagation delay after provisioning.
+    $createAttempts = 10
+    $createOk = $false
+    for ($attempt = 1; $attempt -le $createAttempts; $attempt++) {
+        $createErr = az keyvault certificate create --vault-name $KV --name $CERT_NAME --policy "@$policyPath" -o none 2>&1
+        if ($LASTEXITCODE -eq 0) { $createOk = $true; break }
+        if ($createErr -match 'Forbidden|ForbiddenByRbac') {
+            Write-Host "  RBAC not propagated yet (attempt $attempt/$createAttempts) — waiting 15s..." -ForegroundColor Yellow
+            Start-Sleep 15
+        } else {
+            throw "Certificate creation failed: $createErr"
+        }
+    }
+    if (-not $createOk) { throw "Certificate creation still Forbidden after $($createAttempts * 15)s — check KV RBAC." }
 
     $maxWait = 12   # 12 x 5s = 60s
     $i = 0
@@ -230,5 +277,5 @@ Write-Host "    appgw-system.properties — JMeter system props for ALT"
 Write-Host ""
 Write-Host "  Next steps:" -ForegroundColor Yellow
 Write-Host "    1. azd provision                  — deploys App Gateway (~5-10 min)"
-Write-Host "    2. scripts\run-appgw-load-test.ps1 — creates ALT test + runs comparison"
+Write-Host "    2. scripts\run-appgw-smoke-test.ps1  — creates ALT test + runs comparison"
 Write-Host ""

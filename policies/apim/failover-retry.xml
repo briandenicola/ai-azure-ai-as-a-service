@@ -10,7 +10,7 @@
     {{foundry-primary-endpoint}}   → https://contoso-foundry-primary.cognitiveservices.azure.com
     {{foundry-secondary-endpoint}} → https://contoso-foundry-secondary.cognitiveservices.azure.com
 
-  Test approach: run-failover-test.ps1 temporarily lowers the primary
+  Test approach: run-appgw-failover-test.ps1 temporarily lowers the primary
   gpt-4o-mini deployment to 1K TPM before the test and restores it after.
   Normal test traffic (~4 RPS) saturates 1K TPM quickly, generating genuine
   429s that trigger real APIM failover — no artificial routing logic needed.

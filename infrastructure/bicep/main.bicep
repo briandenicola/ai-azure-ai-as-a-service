@@ -212,7 +212,10 @@ module foundryAccounts 'foundry-hub-project.bicep' = {
 // APIM service names are GLOBALLY unique (they become {name}.azure-api.net).
 // Common prefixes like 'contoso-ai' are already taken. Use uniqueString to generate
 // a stable, per-subscription suffix that won't collide with other tenants.
-var apimName = 'apim-${companyPrefix}-${substring(uniqueString(subscription().subscriptionId), 0, 8)}'
+var apimNameSuffix = substring(uniqueString(subscription().subscriptionId), 0, 8)
+var apimName = 'apim-${companyPrefix}-${apimNameSuffix}'
+// App Gateway PIP DNS labels are globally unique per region — use the same stable suffix.
+var appGwDnsLabel = toLower('${companyPrefix}-ai-gw-${apimNameSuffix}')
 
 module apimGateway 'apim-gateway.bicep' = {
   name: 'apim-gateway'
@@ -249,6 +252,7 @@ module wafAppGwPrimary 'waf-appgw.bicep' = if (deployAppGw) {
   params: {
     location: location
     appGwName: 'agw-${companyPrefix}-ai-primary'
+    domainNameLabel: appGwDnsLabel
     vnetResourceId: networking.outputs.vnetId
     appGwSubnetName: 'snet-appgw-primary'
     apimInternalIpAddress: apimGateway.outputs.apimPrivateIpAddress
@@ -276,6 +280,7 @@ module wafAppGwSecondary 'waf-appgw.bicep' = if (deploySecondaryAppGw) {
   params: {
     location: secondaryLocation
     appGwName: 'agw-${companyPrefix}-ai-secondary'
+    domainNameLabel: toLower('${companyPrefix}-ai-gw2-${apimNameSuffix}')
     vnetResourceId: networking.outputs.vnetId
     appGwSubnetName: 'snet-appgw-primary'
     apimInternalIpAddress: apimSecondaryPrivateIpAddress
@@ -290,32 +295,11 @@ module wafAppGwSecondary 'waf-appgw.bicep' = if (deploySecondaryAppGw) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Module 5c: Key Vault Certificate User RBAC for primary App Gateway UAMI
-// Only deployed when App Gateway is deployed.
-// ---------------------------------------------------------------------------
-
-module kvCertRbacPrimary 'kv-cert-rbac.bicep' = if (deployAppGw) {
-  name: 'kv-cert-rbac-primary'
-  scope: rg
-  params: {
-    keyVaultName: supportingInfra.outputs.keyVaultName
-    deployRbac: deployRbac
-    #disable-next-line BCP318
-    principalId: wafAppGwPrimary.outputs.appGwIdentityPrincipalId ?? ''
-  }
-}
-
-module kvCertRbacSecondary 'kv-cert-rbac.bicep' = if (deploySecondaryAppGw) {
-  name: 'kv-cert-rbac-secondary'
-  scope: rg
-  params: {
-    keyVaultName: supportingInfra.outputs.keyVaultName
-    deployRbac: deployRbac
-    #disable-next-line BCP318
-    principalId: wafAppGwSecondary.outputs.appGwIdentityPrincipalId ?? ''
-  }
-}
+// NOTE: Key Vault Certificate User RBAC for App Gateway UAMIs is handled by
+// scripts/create-appgw-cert.ps1 (Step 4), which runs before azd provision and
+// uses 'az role assignment create' (idempotent). Granting it here too caused
+// RoleAssignmentExists conflicts on repeat deployments because ARM allows only
+// one assignment per principal+role+scope and rejects duplicates regardless of GUID.
 
 // ---------------------------------------------------------------------------
 // Module 6: Foundry ↔ APIM RBAC
@@ -428,13 +412,12 @@ module jumpbox 'jumpbox.bicep' = if (deployJumpbox) {
 
 // ---------------------------------------------------------------------------
 // Module 11: Azure Load Testing
-// Deploy with: azd env set AZURE_DEPLOY_LOAD_TEST true
-// Creates the ALT workspace only. The test definition (JMX, VNet injection,
-// env vars) is wired up by the postprovision hook: scripts/configure-load-test.ps1
+// Always deployed. Test definitions (JMX, VNet injection, env vars, keys)
+// are wired up by the postprovision hook: scripts/configure-load-test.ps1
 // ---------------------------------------------------------------------------
 
-@description('Deploy the Azure Load Testing resource. Set with: azd env set AZURE_DEPLOY_LOAD_TEST true')
-param deployLoadTest bool = false
+@description('Deploy the Azure Load Testing resource (always true; load tests are mandatory).')
+param deployLoadTest bool = true
 
 module loadTesting 'load-testing.bicep' = if (deployLoadTest) {
   name: 'load-testing'

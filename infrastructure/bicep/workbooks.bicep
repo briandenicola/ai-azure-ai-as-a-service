@@ -19,7 +19,7 @@ var workbookId = guid(resourceGroup().id, 'backend-routing-report')
 // Placeholder workspace resource ID that was hardcoded when the workbooks were authored.
 // Both workbook JSONs reference this same placeholder — replaced at deploy time with the
 // real Log Analytics workspace resource ID.
-var placeholderWorkspaceId = '/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev'
+var placeholderWorkspaceId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev'
 
 // ---------------------------------------------------------------------------
 // Workbook 1: Backend Routing Report

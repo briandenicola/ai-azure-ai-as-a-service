@@ -2,7 +2,7 @@
 
 # Fetch Bronze subscription key dynamically
 $BRONZE_KEY = (az rest --method POST `
-    --uri "$base/subscriptions/bronze-test/listSecrets?api-version=2022-08-01" `
+    --uri "$base/subscriptions/app-branch-advisor/listSecrets?api-version=2022-08-01" `
     2>$null | ConvertFrom-Json).primaryKey
 if (-not $BRONZE_KEY) { Write-Error "Could not retrieve Bronze subscription key from APIM '$APIM_NAME'."; exit 1 }
 

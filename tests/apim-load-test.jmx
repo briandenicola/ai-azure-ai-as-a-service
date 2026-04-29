@@ -1,0 +1,456 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  JMeter 5.6 Load Test Plan: AI-as-a-Service — APIM Smoke Test (Direct VNet Baseline)
+  ====================================================================================
+
+  PURPOSE
+  =======
+  Smoke test that hits APIM directly over the internal VNet path — no App Gateway.
+  Use this as:
+    1. Post-provision health check — fastest way to confirm gpt-4o-mini is reachable
+       and Bronze/Silver subscription keys are valid.
+    2. Latency baseline for WAF overhead calculations
+       (appgw-smoke-test latency minus this baseline = WAF inspection cost).
+
+  Traffic path:
+    JMeter (ALT agent in snet-loadtest) → APIM internal VNet hostname (HTTPS 443)
+      → Foundry primary (East US)
+    No App Gateway in path.
+
+  TEST SUITES (run in parallel)
+  ==============================
+  Suite 1  [Bronze] — 3 threads, 5s think, 120s, max_tokens=1  → ~30 RPM, ~60 TPM   (Bronze cap: 60 RPM / 500 TPM)
+  Suite 2  [Silver] — 3 threads, 5s think, 120s, max_tokens=1  → ~30 RPM, ~60 TPM   (Silver cap: 300 RPM / 5000 TPM)
+
+  Expected outcome:
+    All requests return HTTP 200 via primary Foundry (East US).
+    0 failover expected at this load level.
+    P99 latency < 3000 ms (no WAF, direct path).
+
+  ASSERTIONS
+  ==========
+  Both suites assert HTTP 200.
+  X-Backend-Region-Used is extracted and counted.
+  tearDown reports per-tier results.
+
+  PREREQUISITES (Azure Load Testing env vars)
+  ============================================
+    APIM_HOSTNAME  = apim-contoso-<suffix>.azure-api.net   (internal APIM hostname)
+    API_VERSION    = 2024-10-21
+    BRONZE_KEY     = <bronze-test subscription key>
+    SILVER_KEY     = <silver-test subscription key>
+
+  Additional uploaded files:
+    system.properties — trustStore=NONE (SSL bypass for self-signed APIM cert)
+-->
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan"
+              testname="AI-as-a-Service — APIM Smoke Test (Direct VNet Baseline)" enabled="true">
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments"
+                   guiclass="ArgumentsPanel" testclass="Arguments">
+        <collectionProp name="Arguments.arguments">
+          <elementProp name="APIM_HOSTNAME" elementType="Argument">
+            <stringProp name="Argument.name">APIM_HOSTNAME</stringProp>
+            <stringProp name="Argument.value">${__P(APIM_HOSTNAME,apim-contoso.azure-api.net)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="API_VERSION" elementType="Argument">
+            <stringProp name="Argument.name">API_VERSION</stringProp>
+            <stringProp name="Argument.value">${__P(API_VERSION,2024-10-21)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="BRONZE_KEY" elementType="Argument">
+            <stringProp name="Argument.name">BRONZE_KEY</stringProp>
+            <stringProp name="Argument.value">${__P(BRONZE_KEY,)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="SILVER_KEY" elementType="Argument">
+            <stringProp name="Argument.name">SILVER_KEY</stringProp>
+            <stringProp name="Argument.value">${__P(SILVER_KEY,)}</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+        </collectionProp>
+      </elementProp>
+    </TestPlan>
+    <hashTree>
+
+      <!-- ================================================================= -->
+      <!-- setUp: SSL trust-all + counters                                    -->
+      <!-- ================================================================= -->
+      <SetupThreadGroup guiclass="SetupThreadGroupGui" testclass="SetupThreadGroup"
+                        testname="[Setup] SSL trust-all + counters" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">stoptest</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <intProp name="LoopController.loops">1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">1</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">0</stringProp>
+      </SetupThreadGroup>
+      <hashTree>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler"
+                       testname="Trust-all SSL + counters" enabled="true">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="script">
+import javax.net.ssl.*
+import java.security.*
+import java.security.cert.X509Certificate
+
+System.setProperty("javax.net.ssl.trustStore",         "NONE")
+System.setProperty("javax.net.ssl.trustStoreType",     "JKS")
+System.setProperty("javax.net.ssl.trustStorePassword", "")
+
+try {
+    def sslManager = Class.forName("org.apache.jmeter.util.SSLManager")
+                          .getDeclaredMethod("getInstance").invoke(null)
+    def ctxField = Class.forName("org.apache.jmeter.util.JsseSSLManager")
+                        .getDeclaredField("defaultContext")
+    ctxField.setAccessible(true)
+    ctxField.set(sslManager, null)
+    log.info("[SSL] JsseSSLManager.defaultContext reset — trust-all active")
+} catch (Exception e) {
+    log.info("[SSL] JsseSSLManager reset skipped: " + e.message)
+}
+
+def trustAll = [
+    checkClientTrusted: { chain, authType -> },
+    checkServerTrusted: { chain, authType -> },
+    getAcceptedIssuers: { [] as X509Certificate[] }
+] as X509TrustManager
+
+def sc = SSLContext.getInstance("TLS")
+sc.init(null, [trustAll] as TrustManager[], new SecureRandom())
+SSLContext.setDefault(sc)
+HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory())
+HttpsURLConnection.setDefaultHostnameVerifier({ hostname, session -> true } as HostnameVerifier)
+log.info("[SSL] Trust-all installed.")
+
+props.put("bronzePrimary",  new java.util.concurrent.atomic.AtomicInteger(0))
+props.put("bronzeFailover", new java.util.concurrent.atomic.AtomicInteger(0))
+props.put("silverPrimary",  new java.util.concurrent.atomic.AtomicInteger(0))
+props.put("silverFailover", new java.util.concurrent.atomic.AtomicInteger(0))
+
+['BRONZE_KEY', 'SILVER_KEY', 'APIM_HOSTNAME', 'API_VERSION'].each { varName ->
+    def current = props.get(varName)
+    if (current != null &amp;&amp; current.length() &gt; 0) {
+        log.info("[Config] " + varName + " already set (len=" + current.length() + ")")
+    } else {
+        def fromEnv = System.getenv(varName)
+        if (fromEnv != null &amp;&amp; fromEnv.length() &gt; 0) {
+            props.put(varName, fromEnv)
+            log.info("[Config] " + varName + " loaded from OS env")
+        } else {
+            log.warn("[Config] " + varName + " MISSING — test will fail!")
+        }
+    }
+}
+log.info("[Setup] APIM smoke test ready. 2 thread groups (Bronze + Silver) starting.")
+          </stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+      </hashTree>
+
+      <!-- ================================================================= -->
+      <!-- Suite 1: Bronze — 3 threads, 5s think, 120s                       -->
+      <!-- ~30 RPM, ~60 TPM — within Bronze 60 RPM / 500 TPM caps            -->
+      <!-- ================================================================= -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup"
+                   testname="[Bronze] Smoke — gpt-4o-mini" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">true</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">3</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">5</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">120</stringProp>
+        <stringProp name="ThreadGroup.delay">0</stringProp>
+      </ThreadGroup>
+      <hashTree>
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager"
+                       testname="Bronze Auth headers" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="Ocp-Apim-Subscription-Key" elementType="Header">
+              <stringProp name="Header.name">Ocp-Apim-Subscription-Key</stringProp>
+              <stringProp name="Header.value">${BRONZE_KEY}</stringProp>
+            </elementProp>
+            <elementProp name="Content-Type" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="Accept" elementType="Header">
+              <stringProp name="Header.name">Accept</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="User-Agent" elementType="Header">
+              <stringProp name="Header.name">User-Agent</stringProp>
+              <stringProp name="Header.value">Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer"
+                       testname="Think Time 5s" enabled="true">
+          <stringProp name="ConstantTimer.delay">5000</stringProp>
+        </ConstantTimer>
+        <hashTree/>
+
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
+                          testname="[Bronze] POST chat/completions" enabled="true">
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"Hi"}],"max_tokens":1}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">${APIM_HOSTNAME}</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <stringProp name="HTTPSampler.path">/openai/deployments/gpt-4o-mini/chat/completions?api-version=${API_VERSION}</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion"
+                             testname="Assert 200" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49586">200</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Bronze must see 200 — APIM and Foundry reachable</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">8</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+
+          <RegexExtractor guiclass="RegexExtractorGui" testclass="RegexExtractor"
+                          testname="Extract X-Backend-Region-Used" enabled="true">
+            <stringProp name="RegexExtractor.useHeaders">true</stringProp>
+            <stringProp name="RegexExtractor.refname">backendRegion</stringProp>
+            <stringProp name="RegexExtractor.regex">X-Backend-Region-Used: (.+?)[\r\n]</stringProp>
+            <stringProp name="RegexExtractor.template">$1$</stringProp>
+            <stringProp name="RegexExtractor.default">primary</stringProp>
+            <stringProp name="RegexExtractor.match_no">1</stringProp>
+          </RegexExtractor>
+          <hashTree/>
+
+          <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor"
+                               testname="Track Bronze backend counter" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="script">
+def region = vars.get("backendRegion") ?: "primary"
+if (region.contains("secondary")) {
+    props.get("bronzeFailover").incrementAndGet()
+} else {
+    props.get("bronzePrimary").incrementAndGet()
+}
+            </stringProp>
+          </JSR223PostProcessor>
+          <hashTree/>
+        </hashTree>
+      </hashTree>
+
+      <!-- ================================================================= -->
+      <!-- Suite 2: Silver — 3 threads, 5s think, 120s                       -->
+      <!-- ~30 RPM, ~60 TPM — well within Silver 300 RPM / 5000 TPM caps     -->
+      <!-- ================================================================= -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup"
+                   testname="[Silver] Smoke — gpt-4o-mini" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">true</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">3</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">5</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">120</stringProp>
+        <stringProp name="ThreadGroup.delay">0</stringProp>
+      </ThreadGroup>
+      <hashTree>
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager"
+                       testname="Silver Auth headers" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="Ocp-Apim-Subscription-Key" elementType="Header">
+              <stringProp name="Header.name">Ocp-Apim-Subscription-Key</stringProp>
+              <stringProp name="Header.value">${SILVER_KEY}</stringProp>
+            </elementProp>
+            <elementProp name="Content-Type" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="Accept" elementType="Header">
+              <stringProp name="Header.name">Accept</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+            <elementProp name="User-Agent" elementType="Header">
+              <stringProp name="Header.name">User-Agent</stringProp>
+              <stringProp name="Header.value">Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer"
+                       testname="Think Time 5s" enabled="true">
+          <stringProp name="ConstantTimer.delay">5000</stringProp>
+        </ConstantTimer>
+        <hashTree/>
+
+        <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy"
+                          testname="[Silver] POST chat/completions" enabled="true">
+          <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+          <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+            <collectionProp name="Arguments.arguments">
+              <elementProp name="" elementType="HTTPArgument">
+                <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                <stringProp name="Argument.value">{"messages":[{"role":"user","content":"Hi"}],"max_tokens":1}</stringProp>
+                <stringProp name="Argument.metadata">=</stringProp>
+              </elementProp>
+            </collectionProp>
+          </elementProp>
+          <stringProp name="HTTPSampler.domain">${APIM_HOSTNAME}</stringProp>
+          <stringProp name="HTTPSampler.port">443</stringProp>
+          <stringProp name="HTTPSampler.protocol">https</stringProp>
+          <stringProp name="HTTPSampler.path">/openai/deployments/gpt-4o-mini/chat/completions?api-version=${API_VERSION}</stringProp>
+          <stringProp name="HTTPSampler.method">POST</stringProp>
+          <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+          <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+        </HTTPSamplerProxy>
+        <hashTree>
+          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion"
+                             testname="Assert 200" enabled="true">
+            <collectionProp name="Asserion.test_strings">
+              <stringProp name="49586">200</stringProp>
+            </collectionProp>
+            <stringProp name="Assertion.custom_message">Silver must see 200 — APIM and Foundry reachable</stringProp>
+            <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
+            <boolProp name="Assertion.assume_success">false</boolProp>
+            <intProp name="Assertion.test_type">8</intProp>
+          </ResponseAssertion>
+          <hashTree/>
+
+          <RegexExtractor guiclass="RegexExtractorGui" testclass="RegexExtractor"
+                          testname="Extract X-Backend-Region-Used" enabled="true">
+            <stringProp name="RegexExtractor.useHeaders">true</stringProp>
+            <stringProp name="RegexExtractor.refname">backendRegion</stringProp>
+            <stringProp name="RegexExtractor.regex">X-Backend-Region-Used: (.+?)[\r\n]</stringProp>
+            <stringProp name="RegexExtractor.template">$1$</stringProp>
+            <stringProp name="RegexExtractor.default">primary</stringProp>
+            <stringProp name="RegexExtractor.match_no">1</stringProp>
+          </RegexExtractor>
+          <hashTree/>
+
+          <JSR223PostProcessor guiclass="TestBeanGUI" testclass="JSR223PostProcessor"
+                               testname="Track Silver backend counter" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="script">
+def region = vars.get("backendRegion") ?: "primary"
+if (region.contains("secondary")) {
+    props.get("silverFailover").incrementAndGet()
+} else {
+    props.get("silverPrimary").incrementAndGet()
+}
+            </stringProp>
+          </JSR223PostProcessor>
+          <hashTree/>
+        </hashTree>
+      </hashTree>
+
+      <!-- ================================================================= -->
+      <!-- tearDown: Summary                                                  -->
+      <!-- ================================================================= -->
+      <PostThreadGroup guiclass="PostThreadGroupGui" testclass="PostThreadGroup"
+                       testname="[tearDown] APIM smoke summary" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController"
+                     guiclass="LoopControlPanel" testclass="LoopController">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <intProp name="LoopController.loops">1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">1</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">0</stringProp>
+      </PostThreadGroup>
+      <hashTree>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler"
+                       testname="[Summary] APIM smoke results" enabled="true">
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="script">
+def bp  = (props.get("bronzePrimary")  as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+def bf  = (props.get("bronzeFailover") as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+def sp  = (props.get("silverPrimary")  as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+def sf  = (props.get("silverFailover") as java.util.concurrent.atomic.AtomicInteger)?.get() ?: 0
+
+def bTotal = bp + bf
+def sTotal = sp + sf
+def total  = bTotal + sTotal
+
+def bStatus = bTotal == 0 ? "NO REQUESTS — check BRONZE_KEY and APIM_HOSTNAME"
+            : bf == 0     ? "PASS — all primary (${bp}/${bTotal})"
+            :               "PASS — ${bf} via secondary (unexpected but APIM retry worked)"
+def sStatus = sTotal == 0 ? "NO REQUESTS — check SILVER_KEY and APIM_HOSTNAME"
+            : sf == 0     ? "PASS — all primary (${sp}/${sTotal})"
+            :               "PASS — ${sf} via secondary (unexpected but APIM retry worked)"
+
+def msg = """
+=== APIM SMOKE TEST RESULTS (direct VNet — no App Gateway) ===
+
+  [Bronze]  total=${bTotal}  primary=${bp}  failover=${bf}  — ${bStatus}
+  [Silver]  total=${sTotal}  primary=${sp}  failover=${sf}  — ${sStatus}
+
+  [COMBINED]  total=${total}
+
+  Note: 0 failover is normal at this load (~60 TPM combined).
+  If total=0, APIM or Foundry is unreachable — check VNet routing.
+
+==============================================================
+"""
+log.info(msg)
+SampleResult.setResponseData(msg, "UTF-8")
+SampleResult.setResponseCodeOK()
+SampleResult.setSampleLabel("Smoke — total=${total}  Bronze:${bp}p/${bf}f  Silver:${sp}p/${sf}f")
+          </stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+      </hashTree>
+
+      <!-- Summary Report -->
+      <ResultCollector guiclass="SummaryReport" testclass="ResultCollector"
+                       testname="Summary Report" enabled="true">
+        <boolProp name="ResultCollector.error_logging">false</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration">
+            <time>true</time>
+            <latency>true</latency>
+            <timestamp>true</timestamp>
+            <success>true</success>
+            <label>true</label>
+            <code>true</code>
+            <message>true</message>
+            <threadName>true</threadName>
+            <bytes>true</bytes>
+            <connectTime>true</connectTime>
+          </value>
+        </objProp>
+        <stringProp name="filename"></stringProp>
+      </ResultCollector>
+      <hashTree/>
+
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>
