@@ -21,7 +21,7 @@
 .NOTES
   Run ONCE before 'azd provision'.
   For prod: replace the self-signed cert by importing a CA-signed cert:
-    az keyvault certificate import --vault-name kv-contoso-hvrukk \
+    az keyvault certificate import --vault-name <your-kv-name> \
         --name appgw-ssl-cert --file your-cert.pfx
   Then re-run 'azd provision' — App Gateway replaces the cert with no downtime.
 #>
@@ -30,13 +30,22 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # ── Environment ────────────────────────────────────────────────────────────────
-$RG         = 'rg-contoso-ai-platform-dev'
-$KV         = 'kv-contoso-hvrukk'
-$CERT_NAME  = 'appgw-ssl-cert'
-$APPGW_NAME = 'agw-contoso-ai-primary'
-$UAMI_NAME  = "$APPGW_NAME-identity"
-# Deterministic FQDN: domainNameLabel = toLower(appGwName), region = eastus
-$APPGW_FQDN = "$APPGW_NAME.eastus.cloudapp.azure.com"
+. "$PSScriptRoot/_resolve-env.ps1"
+# KV, APPGW_NAME, APPGW_FQDN all resolved from the live resource group above.
+# Fall back to sensible defaults if resources not yet deployed.
+$KV        = if ($KV_NAME)   { $KV_NAME }   else { throw "No Key Vault found in '$RG'. Run: azd provision" }
+$CERT_NAME = 'appgw-ssl-cert'
+# APPGW_NAME resolved by _resolve-env.ps1; derive FQDN from public IP if available.
+# If App Gateway not yet deployed APPGW_NAME / APPGW_FQDN will be empty — that is fine,
+# the cert creation step does not require App Gateway to exist yet.
+$UAMI_NAME = if ($APPGW_NAME) { "$APPGW_NAME-identity" } else {
+    $companyPrefix = if ($companyPrefix) { $companyPrefix } else { 'contoso' }
+    "agw-$companyPrefix-ai-primary-identity"
+}
+# FQDN: use live public IP DNS label if already deployed; otherwise derive from name.
+if (-not $APPGW_FQDN -and $APPGW_NAME) {
+    $APPGW_FQDN = "$APPGW_NAME.$PRIMARY_LOCATION.cloudapp.azure.com"
+}
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $testsDir  = Join-Path $repoRoot 'tests'

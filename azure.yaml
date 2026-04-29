@@ -29,6 +29,151 @@ infra:
 hooks:
   preprovision:
     - shell: pwsh
+      interactive: true
+      continueOnError: false
+      # Prompt for any missing azd environment variables before provisioning.
+      # Already-set variables are skipped so re-runs are non-interactive.
+      run: |
+        # -----------------------------------------------------------------------
+        # Helper: prompt for a free-text value
+        # -----------------------------------------------------------------------
+        function Prompt-Value {
+          param(
+            [string]$Label,
+            [string]$EnvVar,
+            [string]$Default = '',
+            [bool]$Required = $false,
+            [string]$Description = ''
+          )
+          $current = [System.Environment]::GetEnvironmentVariable($EnvVar)
+          if ($current) {
+            Write-Host "$Label already set — skipping."
+            return
+          }
+          if ($Description) { Write-Host "  $Description" }
+          $prompt = if ($Default) { "  $Label [default: $Default]" } else { "  $Label" }
+          $val = Read-Host $prompt
+          if ([string]::IsNullOrWhiteSpace($val)) {
+            if ($Required -and -not $Default) { Write-Error "$Label is required. Exiting."; exit 1 }
+            $val = $Default
+          }
+          if ($val) { azd env set $EnvVar $val }
+        }
+
+        # -----------------------------------------------------------------------
+        # Helper: prompt yes/no → true/false
+        # -----------------------------------------------------------------------
+        function Prompt-Bool {
+          param([string]$Label, [string]$EnvVar, [bool]$Default = $false, [string]$Description = '')
+          $current = [System.Environment]::GetEnvironmentVariable($EnvVar)
+          if ($current) {
+            Write-Host "$Label already set to '$current' — skipping."
+            return
+          }
+          if ($Description) { Write-Host "  $Description" }
+          $defaultStr = if ($Default) { 'Y/n' } else { 'y/N' }
+          $val = Read-Host "  $Label [$defaultStr]"
+          if ([string]::IsNullOrWhiteSpace($val)) {
+            $chosen = $Default
+          } else {
+            $chosen = $val -match '^[Yy]'
+          }
+          azd env set $EnvVar ($chosen.ToString().ToLower())
+        }
+
+        # -----------------------------------------------------------------------
+        # Helper: prompt for a region from an allowed list
+        # -----------------------------------------------------------------------
+        $allowedRegions = @(
+          'australiaeast','brazilsouth','canadacentral','centralus','eastasia',
+          'eastus','eastus2','francecentral','germanywestcentral','japaneast',
+          'koreacentral','northcentralus','northeurope','norwayeast',
+          'southcentralus','southeastasia','swedencentral','switzerlandnorth',
+          'uksouth','ukwest','westeurope','westus','westus2','westus3'
+        ) | Sort-Object
+
+        function Prompt-Region {
+          param([string]$Label, [string]$EnvVar, [string]$Default)
+          $current = [System.Environment]::GetEnvironmentVariable($EnvVar)
+          if ($current) {
+            Write-Host "$Label region already set to '$current' — skipping."
+            return
+          }
+          Write-Host ""
+          Write-Host "  Select $Label region (default: $Default):"
+          for ($i = 0; $i -lt $allowedRegions.Count; $i++) {
+            Write-Host ("    {0,2}. {1}" -f ($i+1), $allowedRegions[$i])
+          }
+          $input = Read-Host "  Enter number or region name [default: $Default]"
+          if ([string]::IsNullOrWhiteSpace($input)) {
+            $chosen = $Default
+          } elseif ($input -match '^\d+$') {
+            $idx = [int]$input - 1
+            if ($idx -lt 0 -or $idx -ge $allowedRegions.Count) { Write-Error "Invalid selection."; exit 1 }
+            $chosen = $allowedRegions[$idx]
+          } else {
+            if ($allowedRegions -notcontains $input) { Write-Error "'$input' is not an allowed region."; exit 1 }
+            $chosen = $input
+          }
+          Write-Host "  Setting $EnvVar = $chosen"
+          azd env set $EnvVar $chosen
+        }
+
+        # -----------------------------------------------------------------------
+        # Prompt for each variable
+        # -----------------------------------------------------------------------
+        Write-Host ""
+        Write-Host "=== Azure AI as a Service — first-time setup ==="
+        Write-Host "(Already-set variables will be skipped)"
+        Write-Host ""
+
+        # Regions
+        Prompt-Region -Label 'Primary'   -EnvVar 'AZURE_LOCATION'           -Default 'eastus'
+        Prompt-Region -Label 'Secondary' -EnvVar 'AZURE_SECONDARY_LOCATION' -Default 'westus'
+
+        # Resource group name
+        Write-Host ""
+        Prompt-Value -Label 'Resource group name' -EnvVar 'AZURE_RESOURCE_GROUP' `
+          -Default "rg-contoso-ai-platform-$($env:AZURE_ENV_NAME ?? 'dev')" `
+          -Description 'Name of the Azure resource group to create / deploy into.'
+
+        # Deploying user object ID — auto-detect if possible
+        if (-not [System.Environment]::GetEnvironmentVariable('AZURE_DEPLOYING_USER_OBJECT_ID')) {
+          $oid = az ad signed-in-user show --query id -o tsv 2>$null
+          if ($oid) {
+            Write-Host "  Auto-detected deploying user object ID: $oid"
+            azd env set AZURE_DEPLOYING_USER_OBJECT_ID $oid
+          } else {
+            Prompt-Value -Label 'Your Entra ID object ID (for storage access)' `
+              -EnvVar 'AZURE_DEPLOYING_USER_OBJECT_ID' -Required $true `
+              -Description 'Run: az ad signed-in-user show --query id -o tsv'
+          }
+        } else {
+          Write-Host "  Deploying user object ID already set — skipping."
+        }
+
+        # Boolean feature flags
+        Write-Host ""
+        Prompt-Bool -Label 'Deploy RBAC assignments (requires Owner or User Access Admin)' `
+          -EnvVar 'AZURE_DEPLOY_RBAC' -Default $true `
+          -Description 'Grants APIM managed identity Cognitive Services User on Foundry accounts.'
+        Prompt-Bool -Label 'Deploy ACI jumpbox (VNet-internal dev/test container)' `
+          -EnvVar 'AZURE_DEPLOY_JUMPBOX' -Default $true
+        Prompt-Bool -Label 'Deploy automation Function App (Event Grid subscription handler)' `
+          -EnvVar 'AZURE_DEPLOY_FUNCTION_APP' -Default $true
+        Prompt-Bool -Label 'Deploy Azure Load Testing resource' `
+          -EnvVar 'AZURE_DEPLOY_LOAD_TEST' -Default $false
+
+        # Optional: SSL cert for App Gateway WAF
+        Write-Host ""
+        Prompt-Value -Label 'SSL cert Key Vault secret ID (leave blank to skip App Gateway WAF)' `
+          -EnvVar 'AZURE_SSL_CERT_KV_SECRET_ID' `
+          -Description 'Format: https://<kv>.vault.azure.net/secrets/<name>/<version>. Press Enter to skip.'
+
+        Write-Host ""
+        Write-Host "=== Configuration complete. Starting provisioning... ==="
+        Write-Host ""
+    - shell: pwsh
       # Register resource providers that may not be enabled in new subscriptions.
       # az provider register is idempotent — safe to run every time.
       run: |

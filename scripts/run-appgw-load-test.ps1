@@ -11,7 +11,6 @@
   Prerequisites:
     • scripts/create-appgw-cert.ps1  has been run
     • azd provision                  has completed (App Gateway deployed)
-    • AppGW public FQDN resolves:    agw-contoso-ai-primary.eastus.cloudapp.azure.com
 
 .NOTES
   Compare output with 'smoke-getenv' baseline:
@@ -23,11 +22,13 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # ── Constants ───────────────────────────────────────────────────────────────────
-$ALT_RESOURCE = 'lt-contoso-ai-dev'
-$ALT_RG       = 'rg-contoso-ai-platform-dev'
-$TEST_ID      = 'appgw-smoke-test'
-$APIM_NAME    = 'apim-contoso-vdls2xyq'
-$APPGW_FQDN   = 'agw-contoso-ai-primary.eastus.cloudapp.azure.com'
+. "$PSScriptRoot/_resolve-env.ps1"
+
+$ALT_RG   = $RG
+$TEST_ID  = 'appgw-smoke-test'
+
+$ALT_RESOURCE = az load list -g $RG --query '[0].name' -o tsv 2>$null
+if (-not $ALT_RESOURCE) { Write-Error "No Azure Load Testing resource found in '$RG'. Run: azd provision" }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
@@ -36,19 +37,19 @@ Write-Host ""
 Write-Host "=== Step 1: Verify App Gateway is deployed ===" -ForegroundColor Cyan
 
 $appgw = az network application-gateway list -g $ALT_RG `
-    --query "[?name=='agw-contoso-ai-primary'].{name:name,state:operationalState}" `
+    --query "[0].{name:name,state:operationalState}" `
     -o json 2>$null | ConvertFrom-Json
 
-if (-not $appgw -or $appgw.Count -eq 0) {
-    Write-Error "App Gateway 'agw-contoso-ai-primary' not found in $ALT_RG.`nRun: azd provision"
+if (-not $appgw) {
+    Write-Error "No App Gateway found in '$ALT_RG'.`nRun: azd provision"
 }
-Write-Host "  App Gateway: $($appgw[0].name) — state: $($appgw[0].state)" -ForegroundColor Green
+Write-Host "  App Gateway: $($appgw.name) — state: $($appgw.state)" -ForegroundColor Green
 
 # ── Step 2: Get APIM keys ────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "=== Step 2: Fetch APIM subscription keys ===" -ForegroundColor Cyan
 
-$subId = az account show --query id -o tsv
+$subId = $SUB_ID
 $BRONZE_KEY = (az rest --method POST `
     --uri "https://management.azure.com/subscriptions/$subId/resourceGroups/$ALT_RG/providers/Microsoft.ApiManagement/service/$APIM_NAME/subscriptions/bronze-test/listSecrets?api-version=2022-08-01" `
     2>$null | ConvertFrom-Json).primaryKey

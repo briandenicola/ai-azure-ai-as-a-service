@@ -71,19 +71,43 @@ azd auth login
 # 2. Create the azd environment
 azd env new dev
 
-# 3. Configure deployment flags
-azd env set AZURE_DEPLOY_RBAC true           # grants APIM  Foundry Cognitive Services User
-azd env set AZURE_DEPLOY_JUMPBOX true        # deploys ACI jumpbox for VNet-internal testing
-azd env set AZURE_DEPLOY_FUNCTION_APP true   # deploys the Event Grid automation Function App
+# 3. Provision — the setup wizard prompts for all required values on first run
+azd provision
+
+# 4. Deploy the Function App code
+azd deploy
+```
+
+The first `azd provision` runs an interactive setup wizard that prompts for:
+
+| Prompt | Default | Description |
+|---|---|---|
+| Primary region | `eastus` | Region for APIM, networking, and supporting infra |
+| Secondary region | `westus` | Region for Foundry failover account and optional secondary App Gateway |
+| Resource group name | `rg-contoso-ai-platform-<env>` | Created automatically if it doesn't exist |
+| Deploying user object ID | Auto-detected | Grants your account Storage Blob access for `azd deploy` |
+| Deploy RBAC assignments | Yes | Grants APIM managed identity Cognitive Services User on Foundry |
+| Deploy ACI jumpbox | Yes | VNet-internal container for dev/test access to APIM |
+| Deploy Function App | Yes | Event Grid automation handler |
+| Deploy Load Testing | No | Azure Load Testing resource |
+| SSL cert Key Vault secret ID | _(blank)_ | Leave blank to skip App Gateway WAF; add later with `azd provision` |
+
+Re-runs skip any variable already set in the environment — the wizard only prompts for missing values.
+
+#### Skipping prompts (CI / scripted deployments)
+
+Pre-set all variables before running `azd provision --no-prompt`:
+
+```powershell
+azd env set AZURE_LOCATION eastus
+azd env set AZURE_SECONDARY_LOCATION westus
 azd env set AZURE_RESOURCE_GROUP rg-contoso-ai-platform-dev
-
-# 4. Capture deploying user's object ID (grants storage access for azd deploy)
 azd env set AZURE_DEPLOYING_USER_OBJECT_ID (az ad signed-in-user show --query id -o tsv)
-
-# 5. Provision all infrastructure (~6 minutes)
+azd env set AZURE_DEPLOY_RBAC true
+azd env set AZURE_DEPLOY_JUMPBOX true
+azd env set AZURE_DEPLOY_FUNCTION_APP true
+azd env set AZURE_DEPLOY_LOAD_TEST false
 azd provision --no-prompt
-
-# 6. Deploy the Function App code
 azd deploy
 ```
 
@@ -92,8 +116,8 @@ azd deploy
 | Resource | Details |
 |---|---|
 | **Azure API Management** (Premium, Internal VNet) | Bronze / Silver / Gold products, 3 API surfaces, circuit-breaker policy |
-| **Azure AI Foundry**  2 | Primary East US + Secondary West US; gpt-4o-mini + Phi-4 model deployments |
-| **Private Endpoints**  2 | Both Foundry accounts reachable only via private DNS (no public network access) |
+| **Azure AI Foundry** × 2 | Primary (primary region) + Secondary (secondary region); gpt-4o-mini + Phi-4 model deployments |
+| **Private Endpoints** × 2 | Both Foundry accounts reachable only via private DNS (no public network access) |
 | **Private DNS Zone** | `privatelink.cognitiveservices.azure.com` linked to the VNet |
 | **Log Analytics Workspace** | 395-day retention; APIM gateway logs + metrics |
 | **Application Insights** | API latency, token counts, HTTP status codes |

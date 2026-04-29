@@ -13,7 +13,7 @@
 #   pwsh scripts/analyze-appinsights.ps1 -StartTime "2026-03-24T17:49:00Z" -EndTime "2026-03-24T17:58:00Z"
 
 param(
-    [string] $WorkspaceId = "1ac4979c-b16a-41d4-9b86-44e187fb5b08",   # law-contoso-ai-dev customerId
+    [string] $WorkspaceId = ($env:AZURE_LAW_CUSTOMER_ID ?? (az monitor log-analytics workspace list -g ($env:AZURE_RESOURCE_GROUP ?? (azd env get-values 2>$null | Select-String '^AZURE_RESOURCE_GROUP=' | ForEach-Object { $_ -replace '^AZURE_RESOURCE_GROUP="?|"?$','' })) --query '[0].customerId' -o tsv 2>$null)),
     [string] $StartTime   = ((Get-Date).ToUniversalTime().AddHours(-1).ToString("yyyy-MM-ddTHH:mm:ssZ")),
     [string] $EndTime     = ((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"))
 )
@@ -190,5 +190,8 @@ if ($r6) { $r6 | Format-Table -AutoSize } else { Write-Host "  (no data)" }
 Write-Host ""
 Write-Host "═══════════════════════════════════════════════════════════════════════"
 Write-Host "  Transaction Search (Portal drilldown):"
-Write-Host "  https://portal.azure.com/#resource/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/microsoft.insights/components/appi-contoso-ai-dev/searchV1"
+$_sub = $env:AZURE_SUBSCRIPTION_ID ?? (az account show --query id -o tsv 2>$null)
+$_rg  = $env:AZURE_RESOURCE_GROUP  ?? (azd env get-values 2>$null | Select-String '^AZURE_RESOURCE_GROUP=' | ForEach-Object { $_ -replace '^AZURE_RESOURCE_GROUP="?|"?$','' })
+$_appInsights = az monitor app-insights component list -g $_rg --query '[0].name' -o tsv 2>$null
+Write-Host "  https://portal.azure.com/#resource/subscriptions/$_sub/resourceGroups/$_rg/providers/microsoft.insights/components/$_appInsights/searchV1"
 Write-Host "═══════════════════════════════════════════════════════════════════════"

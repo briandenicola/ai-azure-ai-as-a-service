@@ -28,20 +28,24 @@
     • APIM has 'foundry-primary-endpoint' and 'foundry-secondary-endpoint' Named Values
 
   Primary gpt-4o-mini is kept at 1K TPM permanently so every run produces
-  genuine 429s without any setup. To restore TPM manually if needed:
-    az rest --method patch --uri "https://management.azure.com/subscriptions/d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.CognitiveServices/accounts/contoso-foundry-primary/deployments/gpt-4o-mini?api-version=2024-04-01-preview" --body '{"sku":{"name":"Standard","capacity":10}}'
+  genuine 429s without any setup. To restore TPM manually if needed, run
+  scripts/check-foundry-capacity.ps1 to find account names, then:
+    az cognitiveservices account deployment update -g <RG> --account-name <foundry-primary> \
+        --deployment-name gpt-4o-mini --sku-capacity 10
 #>
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # ── Constants ───────────────────────────────────────────────────────────────────
-$ALT_RESOURCE = 'lt-contoso-ai-dev'
-$ALT_RG       = 'rg-contoso-ai-platform-dev'
-$TEST_ID      = 'appgw-failover-test'
-$APIM_NAME    = 'apim-contoso-vdls2xyq'
-$APPGW_FQDN   = 'agw-contoso-ai-primary.eastus.cloudapp.azure.com'
-$SUB_ID       = 'd201ebeb-c470-4a6f-82d5-c2f95bb0dc1e'
+. "$PSScriptRoot/_resolve-env.ps1"
+
+$ALT_RG   = $RG
+$TEST_ID  = 'appgw-failover-test'
+
+# Discover Azure Load Testing resource name from the resource group
+$ALT_RESOURCE = az load list -g $RG --query '[0].name' -o tsv 2>$null
+if (-not $ALT_RESOURCE) { Write-Error "No Azure Load Testing resource found in '$RG'. Run: azd provision" }
 
 # Primary gpt-4o-mini is permanently kept at 1K TPM — genuine 429s at test RPS.
 # Failover policy is provisioned by azd (infrastructure/bicep/apim-gateway.bicep).
@@ -53,27 +57,27 @@ Write-Host ""
 Write-Host "=== Step 1: Verify App Gateway is deployed ===" -ForegroundColor Cyan
 
 $appgw = az network application-gateway list -g $ALT_RG `
-    --query "[?name=='agw-contoso-ai-primary'].{name:name,state:operationalState}" `
+    --query "[0].{name:name,state:operationalState}" `
     -o json 2>$null | ConvertFrom-Json
 
-if (-not $appgw -or $appgw.Count -eq 0) {
-    Write-Error "App Gateway 'agw-contoso-ai-primary' not found in $ALT_RG.`nRun: azd provision"
+if (-not $appgw) {
+    Write-Error "No App Gateway found in '$ALT_RG'.`nRun: azd provision"
 }
-Write-Host "  App Gateway: $($appgw[0].name) — state: $($appgw[0].state)" -ForegroundColor Green
+Write-Host "  App Gateway: $($appgw.name) — state: $($appgw.state)" -ForegroundColor Green
 
 # ── Step 2: Get APIM keys ────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "=== Step 2: Fetch APIM subscription keys ===" -ForegroundColor Cyan
 
 $BRONZE_KEY = (az rest --method POST `
-    --uri "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$ALT_RG/providers/Microsoft.ApiManagement/service/$APIM_NAME/subscriptions/bronze-test/listSecrets?api-version=2022-08-01" `
+    --uri "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.ApiManagement/service/$APIM_NAME/subscriptions/bronze-test/listSecrets?api-version=2022-08-01" `
     2>$null | ConvertFrom-Json).primaryKey
 
 # Use Silver key for load test: Silver has 300 RPM vs Bronze 60 RPM.
 # At 20 threads x 5s think time = 240 req/min, Bronze saturates its own
 # rate limiter before the Foundry backend can 429. Silver stays within limits.
 $SILVER_KEY = (az rest --method POST `
-    --uri "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$ALT_RG/providers/Microsoft.ApiManagement/service/$APIM_NAME/subscriptions/silver-test/listSecrets?api-version=2022-08-01" `
+    --uri "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.ApiManagement/service/$APIM_NAME/subscriptions/silver-test/listSecrets?api-version=2022-08-01" `
     2>$null | ConvertFrom-Json).primaryKey
 
 Write-Host "  Bronze key: $($BRONZE_KEY.Substring(0,8))..." -ForegroundColor Green

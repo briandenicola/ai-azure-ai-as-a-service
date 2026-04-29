@@ -2,11 +2,11 @@
 Set-StrictMode -Off
 $ErrorActionPreference = "Stop"
 
-$ALT_RESOURCE = "lt-contoso-ai-dev"
-$ALT_RG       = "rg-contoso-ai-platform-dev"
-$APIM_NAME    = "apim-contoso-vdls2xyq"
-$APPGW_FQDN   = "agw-contoso-ai-primary.eastus.cloudapp.azure.com"
-$SUB_ID       = "d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e"
+. "$PSScriptRoot/_resolve-env.ps1"
+
+$ALT_RG       = $RG
+$ALT_RESOURCE = az load list -g $RG --query '[0].name' -o tsv 2>$null
+if (-not $ALT_RESOURCE) { Write-Error "No Azure Load Testing resource found in '$RG'. Run: azd provision" }
 $repoRoot     = Split-Path -Parent $PSScriptRoot
 
 function Get-ApimKey([string]$subName) {

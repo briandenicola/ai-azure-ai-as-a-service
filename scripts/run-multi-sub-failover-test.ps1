@@ -32,20 +32,20 @@
     • App Gateway operational state: Running
 
   To check App Gateway state:
-    az network application-gateway show -g rg-contoso-ai-platform-dev
-        -n agw-contoso-ai-primary --query "operationalState" -o tsv
+    az network application-gateway list -g <RG> --query '[0].{name:name,state:operationalState}' -o table
 #>
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # ── Constants ───────────────────────────────────────────────────────────────────
-$ALT_RESOURCE = 'lt-contoso-ai-dev'
-$ALT_RG       = 'rg-contoso-ai-platform-dev'
-$TEST_ID      = 'multi-sub-failover-test'
-$APIM_NAME    = 'apim-contoso-vdls2xyq'
-$APPGW_FQDN   = 'agw-contoso-ai-primary.eastus.cloudapp.azure.com'
-$SUB_ID       = 'd201ebeb-c470-4a6f-82d5-c2f95bb0dc1e'
+. "$PSScriptRoot/_resolve-env.ps1"
+
+$ALT_RG   = $RG
+$TEST_ID  = 'multi-sub-failover-test'
+
+$ALT_RESOURCE = az load list -g $RG --query '[0].name' -o tsv 2>$null
+if (-not $ALT_RESOURCE) { Write-Error "No Azure Load Testing resource found in '$RG'. Run: azd provision" }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 
@@ -54,17 +54,17 @@ Write-Host ""
 Write-Host "=== Step 1: Verify App Gateway is running ===" -ForegroundColor Cyan
 
 $appgw = az network application-gateway list -g $ALT_RG `
-    --query "[?name=='agw-contoso-ai-primary'].{name:name,state:operationalState}" `
+    --query "[0].{name:name,state:operationalState}" `
     -o json 2>$null | ConvertFrom-Json
 
-if (-not $appgw -or $appgw.Count -eq 0) {
-    Write-Error "App Gateway 'agw-contoso-ai-primary' not found in $ALT_RG. Run: azd provision"
+if (-not $appgw) {
+    Write-Error "App Gateway not found in '$ALT_RG'. Run: azd provision"
 }
-$appgwState = $appgw[0].state
-Write-Host "  App Gateway: $($appgw[0].name) — state: $appgwState" -ForegroundColor Green
+$appgwState = $appgw.state
+Write-Host "  App Gateway: $($appgw.name) — state: $appgwState" -ForegroundColor Green
 if ($appgwState -ne 'Running') {
     Write-Host "  WARNING: App Gateway is '$appgwState' — starting it now..." -ForegroundColor Yellow
-    az network application-gateway start -g $ALT_RG -n agw-contoso-ai-primary 2>&1 | Out-Null
+    az network application-gateway start -g $ALT_RG -n $appgw.name 2>&1 | Out-Null
     Write-Host "  App Gateway start initiated (takes ~2-3 min)." -ForegroundColor Yellow
     Start-Sleep 30
 }

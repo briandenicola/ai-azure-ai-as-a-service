@@ -22,8 +22,63 @@ targetScope = 'subscription'
 // Override via `azd env set <NAME> <value>` before provisioning.
 // ---------------------------------------------------------------------------
 
-@description('Azure region for all resources')
+@description('Primary Azure region — resource group, APIM, networking, and supporting infra')
+@allowed([
+  'eastus'
+  'eastus2'
+  'westus'
+  'westus2'
+  'westus3'
+  'centralus'
+  'northcentralus'
+  'southcentralus'
+  'uksouth'
+  'ukwest'
+  'northeurope'
+  'westeurope'
+  'francecentral'
+  'germanywestcentral'
+  'norwayeast'
+  'swedencentral'
+  'switzerlandnorth'
+  'australiaeast'
+  'japaneast'
+  'koreacentral'
+  'southeastasia'
+  'eastasia'
+  'canadacentral'
+  'brazilsouth'
+])
 param location string = 'eastus'
+
+@description('Secondary Azure region — Foundry failover account and optional secondary App Gateway')
+@allowed([
+  'eastus'
+  'eastus2'
+  'westus'
+  'westus2'
+  'westus3'
+  'centralus'
+  'northcentralus'
+  'southcentralus'
+  'uksouth'
+  'ukwest'
+  'northeurope'
+  'westeurope'
+  'francecentral'
+  'germanywestcentral'
+  'norwayeast'
+  'swedencentral'
+  'switzerlandnorth'
+  'australiaeast'
+  'japaneast'
+  'koreacentral'
+  'southeastasia'
+  'eastasia'
+  'canadacentral'
+  'brazilsouth'
+])
+param secondaryLocation string = 'westus'
 
 @description('Environment tag — controls resource naming (e.g. dev, staging, prod, or your azd env name)')
 param environment string = 'dev'
@@ -140,8 +195,8 @@ module foundryAccounts 'foundry-hub-project.bicep' = {
   scope: rg
   params: {
     accountPrefix: '${companyPrefix}-foundry'
-    primaryLocation: 'eastus'
-    secondaryLocation: 'westus'
+    primaryLocation: location
+    secondaryLocation: secondaryLocation
     developerObjectIds: developerObjectIds
     deployRbac: deployRbac
     vnetResourceId: networking.outputs.vnetId
@@ -192,7 +247,7 @@ module wafAppGwPrimary 'waf-appgw.bicep' = if (deployAppGw) {
   name: 'waf-appgw-primary'
   scope: rg
   params: {
-    location: 'eastus'
+    location: location
     appGwName: 'agw-${companyPrefix}-ai-primary'
     vnetResourceId: networking.outputs.vnetId
     appGwSubnetName: 'snet-appgw-primary'
@@ -219,7 +274,7 @@ module wafAppGwSecondary 'waf-appgw.bicep' = if (deploySecondaryAppGw) {
   name: 'waf-appgw-secondary'
   scope: rg
   params: {
-    location: 'westus'
+    location: secondaryLocation
     appGwName: 'agw-${companyPrefix}-ai-secondary'
     vnetResourceId: networking.outputs.vnetId
     appGwSubnetName: 'snet-appgw-primary'

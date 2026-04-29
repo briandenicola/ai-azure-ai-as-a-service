@@ -12,11 +12,11 @@
 
 [CmdletBinding()]
 param(
-    [string] $SubscriptionId    = "d201ebeb-c470-4a6f-82d5-c2f95bb0dc1e",
-    [string] $ResourceGroup     = "rg-contoso-ai-platform-dev",
-    [string] $AppInsightsName   = "appi-contoso-ai-dev",
-    [string] $WorkspaceName     = "law-contoso-ai-dev",
-    [string] $Location          = "eastus"
+    [string] $SubscriptionId    = ($env:AZURE_SUBSCRIPTION_ID ?? (az account show --query id -o tsv 2>$null)),
+    [string] $ResourceGroup     = ($env:AZURE_RESOURCE_GROUP   ?? (azd env get-values 2>$null | Select-String '^AZURE_RESOURCE_GROUP=' | ForEach-Object { $_ -replace '^AZURE_RESOURCE_GROUP="?|"?$','' })),
+    [string] $AppInsightsName   = "appi-$((azd env get-values 2>$null | Select-String '^AZURE_ENV_NAME=' | ForEach-Object { $_ -replace '^AZURE_ENV_NAME="?|"?$','' }) ?? 'contoso-ai-dev')",
+    [string] $WorkspaceName     = "law-$((azd env get-values 2>$null | Select-String '^AZURE_ENV_NAME=' | ForEach-Object { $_ -replace '^AZURE_ENV_NAME="?|"?$','' }) ?? 'contoso-ai-dev')",
+    [string] $Location          = ($env:AZURE_LOCATION ?? (azd env get-values 2>$null | Select-String '^AZURE_LOCATION=' | ForEach-Object { $_ -replace '^AZURE_LOCATION="?|"?$','' }) ?? 'eastus')
 )
 
 Set-StrictMode -Version Latest
