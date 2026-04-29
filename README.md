@@ -164,6 +164,49 @@ az apim subscription show --service-name <apim-name> -g rg-contoso-ai-platform-d
 
 ---
 
+## Load Testing
+
+All load tests require `AZURE_DEPLOY_LOAD_TEST=true` at provision time and route traffic through the App Gateway WAF → APIM → Foundry path.  
+Run any script from the repo root — it will resolve all resource names automatically from your `azd` environment.
+
+### Test scripts
+
+| Script | ALT test ID | Duration | What it proves |
+|---|---|---|---|
+| `scripts/run-failover-test.ps1` | `appgw-failover-test` | ~2 min | Circuit breaker fires and APIM transparently retries on secondary Foundry |
+| `scripts/run-multi-sub-failover-test.ps1` | `multi-sub-failover-test` | ~2 min | Bronze **and** Silver subscriptions both fail over independently under shared TPM pressure |
+| `scripts/run-steady-state-test.ps1` | `steady-state-test` | 1 hour | All four LOB subscriptions produce smooth baseline traffic — no throttling, no gaps in dashboards |
+| `scripts/run-appgw-load-test.ps1` | `appgw-smoke-test` | ~5 min | Measures WAF inspection overhead vs the direct-APIM baseline latency (~10–30 ms expected) |
+
+### Choosing the right test
+
+- **Validating the failover policy after a change** → `run-failover-test.ps1`  
+  Deliberately exhausts the primary Foundry TPM cap and confirms every request still returns HTTP 200 via the secondary, with `X-Backend-Region-Used: secondary-failover` in the response.
+
+- **Proving multi-LOB isolation** → `run-multi-sub-failover-test.ps1`  
+  Runs Bronze and Silver blast suites concurrently. Use this when you need to demonstrate that one tenant's burst does not black out another tenant's subscription.
+
+- **Populating monitoring dashboards / alerting baselines** → `run-steady-state-test.ps1`  
+  Sends ~160 TPM across four LOB subscriptions for one hour — well under the 1K TPM cap so no failover occurs. Run this overnight to generate realistic traffic for Grafana and the App Insights workbook.  
+  Can run **concurrently** with `run-multi-sub-failover-test.ps1` (different ALT test ID).
+
+- **Measuring App Gateway WAF overhead** → `run-appgw-load-test.ps1`  
+  Compares AppGW-path latency against the stored direct-APIM baseline. Use after updating WAF rules or upgrading the App Gateway SKU to confirm the overhead stays within acceptable bounds.
+
+### Reading the results
+
+After any test completes the script prints a summary table. For deeper analysis:
+
+```powershell
+# Open the failover analysis workbook
+scripts/analyze-appinsights.ps1
+
+# Check circuit breaker state across backends
+scripts/check-circuit-breaker-cache.ps1
+```
+
+---
+
 ## Platform Concepts
 
 ### Subscription Tiers
