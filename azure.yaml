@@ -268,6 +268,24 @@ hooks:
       run: scripts/configure-load-test.ps1
       interactive: false
       continueOnError: true   # don't fail the entire provision if ALT setup fails
+    - shell: pwsh
+      # App Gateway operationalState is not a Bicep-settable property — ARM always
+      # resets it to Stopped after every re-deployment.  This hook starts it
+      # automatically after every azd provision so traffic flows immediately.
+      run: |
+        $agwName = "agw-contoso-ai-primary"
+        $RG      = $env:AZURE_RESOURCE_GROUP
+        if (-not $RG) { $RG = "rg-contoso-ai-platform-$($env:AZURE_ENV_NAME ?? 'dev')" }
+        $state = az network application-gateway show --name $agwName --resource-group $RG --query operationalState -o tsv 2>$null
+        if ($state -eq 'Running') {
+          Write-Host "App Gateway '$agwName' is already Running — nothing to do."
+        } else {
+          Write-Host "App Gateway '$agwName' is '$state' — starting it now..."
+          az network application-gateway start --name $agwName --resource-group $RG
+          Write-Host "App Gateway started."
+        }
+      interactive: false
+      continueOnError: true   # don't fail provision if gateway start times out
 
 # ---------------------------------------------------------------------------
 # Services — the automation Function App is the only deployable service.

@@ -774,6 +774,57 @@ resource openaiInferenceApiPolicy 'Microsoft.ApiManagement/service/apis/policies
 }
 
 // ==========================================
+// Resource: OpenAI Responses API operations
+//
+// The agent_framework_azure_ai SDK uses the OpenAI Responses API (POST /responses)
+// for all inference calls — not Chat Completions. The openai-inference API spec from
+// 2024-10-21 predates the Responses API, so these operations are added explicitly.
+// ==========================================
+resource openaiResponsesPost 'Microsoft.ApiManagement/service/apis/operations@2023-05-01-preview' = {
+  parent: openaiInferenceApi
+  name: 'responses-post'
+  properties: {
+    displayName: 'Create a model response'
+    method: 'POST'
+    urlTemplate: '/responses'
+  }
+}
+
+resource openaiResponsesGet 'Microsoft.ApiManagement/service/apis/operations@2023-05-01-preview' = {
+  parent: openaiInferenceApi
+  name: 'responses-get'
+  properties: {
+    displayName: 'Retrieve a model response'
+    method: 'GET'
+    urlTemplate: '/responses/{response_id}'
+    templateParameters: [
+      {
+        name: 'response_id'
+        required: true
+        type: 'string'
+      }
+    ]
+  }
+}
+
+resource openaiResponsesDelete 'Microsoft.ApiManagement/service/apis/operations@2023-05-01-preview' = {
+  parent: openaiInferenceApi
+  name: 'responses-delete'
+  properties: {
+    displayName: 'Delete a model response'
+    method: 'DELETE'
+    urlTemplate: '/responses/{response_id}'
+    templateParameters: [
+      {
+        name: 'response_id'
+        required: true
+        type: 'string'
+      }
+    ]
+  }
+}
+
+// ==========================================
 // Resource: Azure AI Foundry Agents API
 // Imported from the official Microsoft OpenAPI spec published in azure-rest-api-specs.
 // Covers: agents, threads, runs, messages, files, vector stores.

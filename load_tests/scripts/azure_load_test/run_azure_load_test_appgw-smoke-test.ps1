@@ -21,7 +21,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # ── Constants ───────────────────────────────────────────────────────────────────
-. "$PSScriptRoot/_resolve-env.ps1"
+. "$PSScriptRoot/../../../scripts/_resolve-env.ps1"
 
 $ALT_RG   = $RG
 $TEST_ID  = 'appgw-smoke-test'
@@ -29,7 +29,7 @@ $TEST_ID  = 'appgw-smoke-test'
 $ALT_RESOURCE = az load list -g $RG --query '[0].name' -o tsv 2>$null
 if (-not $ALT_RESOURCE) { Write-Error "No Azure Load Testing resource found in '$RG'. Run: azd provision" }
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
+$repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 
 # ── Step 1: Verify App Gateway is deployed and healthy ──────────────────────────
 Write-Host ""
@@ -87,7 +87,7 @@ if (-not $testExists) {
         "--test-id", $TEST_ID,
         "--display-name", "AppGW WAF v2 Smoke Test",
         "--description", "Measures latency through App Gateway WAF v2 vs direct APIM baseline",
-        "--test-plan", "$repoRoot\tests\appgw-load-test.jmx",
+        "--test-plan", "$repoRoot\load_tests\definitions\appgw-load-test.jmx",
         "--env", "APIM_HOSTNAME=$APPGW_FQDN",
         "--env", "API_VERSION=2024-10-21",
         "--env", "BRONZE_KEY=$BRONZE_KEY",
@@ -103,7 +103,7 @@ if (-not $testExists) {
     az load test update `
         --load-test-resource $ALT_RESOURCE -g $ALT_RG `
         --test-id $TEST_ID `
-        --test-plan "$repoRoot\tests\appgw-load-test.jmx" `
+        --test-plan "$repoRoot\load_tests\definitions\appgw-load-test.jmx" `
         -o none
     Write-Host "  Test plan updated." -ForegroundColor Green
 
@@ -130,9 +130,9 @@ if (-not $testExists) {
 Write-Host ""
 Write-Host "=== Step 4: Upload AppGW truststore and system.properties ===" -ForegroundColor Cyan
 
-$truststore = "$repoRoot\tests\appgw-truststore.p12"
-$sysprops   = "$repoRoot\tests\appgw-system.properties"
-$sysProps2  = "$repoRoot\tests\system.properties"
+$truststore = "$repoRoot\load_tests\config\appgw-truststore.p12"
+$sysprops   = "$repoRoot\load_tests\config\appgw-system.properties"
+$sysProps2  = "$repoRoot\load_tests\config\system.properties"
 
 if (-not (Test-Path $truststore)) {
     Write-Error "Truststore not found: $truststore`nRun: scripts/create-appgw-cert.ps1 first"

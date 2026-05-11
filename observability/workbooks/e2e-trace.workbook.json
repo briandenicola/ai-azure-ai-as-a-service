@@ -1,4 +1,4 @@
-{
+﻿{
   "version": "Notebook/1.0",
   "items": [
     {
@@ -355,9 +355,9 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "// Full 3-layer trace table: AGW ? APIM ? Foundry\n// Each layer shows its own HTTP status code and response time.\n// AGW join: approximate via clientIp + 2s time bucket (AGW has no per-request UUID).\nlet filter_corrId = \"{CorrelationId}\";\nlet apimRows = AppRequests\n| where TimeGenerated {TimeRange}\n| extend corrId = tostring(Properties[\"Request-X-Correlation-Id\"])\n| extend apimSubscription = tostring(Properties[\"Subscription Name\"])\n| where isnotempty(corrId)\n| where filter_corrId == \"\" or corrId == filter_corrId\n| where \"{SubscriptionName}\" == \"value:all\" or apimSubscription == \"{SubscriptionName}\"\n| project\n    corrId,\n    opId             = OperationId,\n    apimStart        = TimeGenerated,\n    apimDurationMs   = DurationMs,\n    apimStatus       = ResultCode,\n    url              = Url,\n    apimProduct      = tostring(Properties[\"Product Name\"]),\n    apimSubscription,\n    backendUsed      = tostring(Properties[\"Response-X-Backend-Region-Used\"]);\nlet foundryRows = AppDependencies\n| where TimeGenerated {TimeRange}\n| extend corrId = tostring(Properties[\"Request-X-Correlation-Id\"])\n| where isnotempty(corrId)\n| where filter_corrId == \"\" or corrId == filter_corrId\n| summarize\n    foundryDurationMs = avg(DurationMs),\n    foundryStatus     = any(ResultCode),\n    foundryTarget     = any(Target)\n    by corrId, opId = OperationId;\nlet agwRows = AGWAccessLogs\n| where TimeGenerated {TimeRange}\n| project\n    agwDurationMs    = toreal(TimeTaken) * 1000,\n    agwStatus        = HttpStatus,\n    agwClientIp      = ClientIp,\n    agwKey           = strcat(ClientIp, \"~\", tostring(bin(TimeGenerated, 2s)));\napimRows\n| join kind=leftouter foundryRows on opId\n| extend corrClientIp = tostring(split(corrId, \"-\")[0])\n| extend approxKey    = strcat(corrClientIp, \"~\", tostring(bin(apimStart, 2s)))\n| join kind=leftouter agwRows on $left.approxKey == $right.agwKey\n| project-away corrClientIp, approxKey, agwKey\n| sort by isnotnull(foundryDurationMs) desc, apimStart desc\n| project\n    Time             = apimStart,\n    ['Corr ID']      = corrId,\n    ['URL']          = url,\n    ['AGW HTTP']     = agwStatus,\n    ['AGW (ms)']     = round(agwDurationMs, 1),\n    ['APIM HTTP']    = apimStatus,\n    ['APIM (ms)']    = round(apimDurationMs, 1),\n    ['Foundry Backend']= iff(isempty(backendUsed), 'primary', backendUsed),\n    ['Foundry HTTP'] = foundryStatus,\n    ['Foundry (ms)'] = round(foundryDurationMs, 1),\n    ['Product']      = apimProduct,\n    ['Subscription'] = apimSubscription,\n    ['Client IP']    = agwClientIp",
+        "query": "// APIM -> Foundry per-request trace (exact correlation via Request-X-Correlation-Id).\n// AGW data is in the table below -- it has no per-request UUID so joins are unreliable.\nlet filter_corrId = \"{CorrelationId}\";\nlet apimRows = AppRequests\n| where TimeGenerated {TimeRange}\n| extend corrId = tostring(Properties[\"Request-X-Correlation-Id\"])\n| extend apimSubscription = tostring(Properties[\"Subscription Name\"])\n| where isnotempty(corrId)\n| where filter_corrId == \"\" or corrId == filter_corrId\n| where \"{SubscriptionName}\" == \"value:all\" or apimSubscription == \"{SubscriptionName}\"\n| project\n    corrId,\n    opId             = OperationId,\n    apimStart        = TimeGenerated,\n    apimDurationMs   = DurationMs,\n    apimStatus       = ResultCode,\n    url              = Url,\n    apimProduct      = tostring(Properties[\"Product Name\"]),\n    apimSubscription,\n    backendUsed      = tostring(Properties[\"Response-X-Backend-Region-Used\"]);\nlet foundryRows = AppDependencies\n| where TimeGenerated {TimeRange}\n| extend corrId = tostring(Properties[\"Request-X-Correlation-Id\"])\n| where isnotempty(corrId)\n| where filter_corrId == \"\" or corrId == filter_corrId\n| summarize\n    foundryDurationMs = avg(DurationMs),\n    foundryStatus     = any(ResultCode),\n    foundryTarget     = any(Target)\n    by corrId, opId = OperationId;\napimRows\n| join kind=leftouter foundryRows on opId\n| sort by apimStart desc\n| project\n    Time             = apimStart,\n    ['Corr ID']      = corrId,\n    ['URL']          = url,\n    ['APIM HTTP']    = apimStatus,\n    ['APIM (ms)']    = round(apimDurationMs, 1),\n    ['Foundry Backend'] = iff(isempty(backendUsed), 'primary', backendUsed),\n    ['Foundry HTTP'] = foundryStatus,\n    ['Foundry (ms)'] = round(foundryDurationMs, 1),\n    ['Product']      = apimProduct,\n    ['Subscription'] = apimSubscription",
         "size": 1,
-        "title": "Per-request trace table (AppGW + APIM + Foundry)",
+        "title": "APIM + Foundry per-request trace (exact correlation)",
         "showQuery": true,
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
@@ -505,6 +505,53 @@
         "exportDefaultValue": ""
       },
       "name": "trace-table"
+    },
+    {
+      "type": 1,
+      "content": {
+        "json": "### App Gateway access log\n\nShows every request the gateway received — including those **shed before reaching APIM** (WAF blocks, rate limits). A 429 or 403 here with no matching Corr ID in the table above = rejected at the perimeter, never forwarded."
+      },
+      "name": "agw-table-intro"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "// App Gateway access log — all requests including those shed before reaching APIM.\n// A 429/403 here with no matching row in the APIM table above = WAF/rate-limit blocked it.\nAGWAccessLogs\n| where TimeGenerated {TimeRange}\n| sort by TimeGenerated desc\n| project\n    Time         = TimeGenerated,\n    ['AGW HTTP'] = HttpStatus,\n    ['AGW (ms)'] = round(toreal(TimeTaken) * 1000, 1),\n    ['Client IP'] = ClientIp,\n    ['URL']       = RequestUri,\n    ['Method']    = HttpMethod,\n    ['SSL']       = SslEnabled,\n    ['User Agent'] = UserAgent",
+        "size": 1,
+        "title": "App Gateway access log (all requests — including shed/blocked)",
+        "showQuery": true,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "formatters": [
+            {
+              "columnMatch": "AGW HTTP",
+              "formatter": 18,
+              "formatOptions": {
+                "thresholdsOptions": "icons",
+                "thresholdsGrid": [
+                  { "operator": ">=", "thresholdValue": "500", "representation": "failed",  "text": "{0}" },
+                  { "operator": ">=", "thresholdValue": "400", "representation": "warning", "text": "{0}" },
+                  { "operator": "Default", "thresholdValue": null, "representation": "success", "text": "{0}" }
+                ]
+              }
+            },
+            {
+              "columnMatch": "AGW (ms)",
+              "formatter": 8,
+              "formatOptions": { "palette": "blue", "min": 0, "max": 30000 }
+            }
+          ],
+          "rowLimit": 500,
+          "filter": true
+        }
+      },
+      "name": "agw-table"
     },
     {
       "type": 1,

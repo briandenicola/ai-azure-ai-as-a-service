@@ -14,8 +14,31 @@ __pycache__/
 .venv/
 *.egg-info/
 
+# LOB apps — belt-and-suspenders safety net so env files can never leak
+# even if a new LOB is added without its own .gitignore
+lobs/**/.env
+lobs/**/.venv/
+lobs/**/node_modules/
+lobs/**/__pycache__/
+lobs/**/*.pyc
+
 # Node
 node_modules/
 
 # Editor
-.vscode/settings.json
+.vscode/
+
+# Azurite (local Azure Storage emulator) — never commit emulator data files
+__azurite_db_blob*.json
+__azurite_db_blob_extent*.json
+
+# ARM template output — compiled from Bicep, not source of truth
+infrastructure/bicep/*.json
+
+# JMeter runtime artifacts — logs and test-run output
+load_tests/scripts/jmeter/jmeter.log
+load_tests/scripts/jmeter/output/
+
+# Stale/working copies of test scripts (canonical versions are in load_tests/)
+tests/*.ps1
+tests/scripts/

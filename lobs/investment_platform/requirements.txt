@@ -19,6 +19,7 @@ agent-dev-cli==0.0.1b260205
  
 # Azure authentication
 azure-identity==1.25.3
+msal==1.31.1                  # Interactive Entra login (device code flow)
  
 # GitHub integration
 PyGithub==2.8.1

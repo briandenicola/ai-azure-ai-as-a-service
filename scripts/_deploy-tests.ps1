@@ -108,13 +108,13 @@ Deploy-AltTest `
     "multi-sub-failover-test" `
     "Multi-Sub Failover: Bronze+Silver+Gold" `
     "Bronze+Silver+Gold sustained+blast suites; triggers APIM failover-retry policy" `
-    "$repoRoot\tests\multi-sub-failover-test.jmx"
+    "$repoRoot\load_tests\definitions\multi-sub-failover-test.jmx"
 
 Deploy-AltTest `
     "steady-state-test" `
     "Steady State: All Subscriptions (1h)" `
     "Baseline 4-sub steady traffic; ~160 TPM combined; no failover expected" `
-    "$repoRoot\tests\steady-state-test.jmx"
+    "$repoRoot\load_tests\definitions\steady-state-test.jmx"
 
 Write-Host "`n=== Both tests deployed successfully ===" -ForegroundColor Green
 Write-Host "  To run failover test:  pwsh scripts/run-multi-sub-failover-test.ps1" -ForegroundColor Cyan

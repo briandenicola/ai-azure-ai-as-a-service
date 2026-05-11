@@ -18,10 +18,12 @@ FEATURES:
 """
 
 import asyncio
+import os
 import sys
 from dotenv import load_dotenv
 
 from agents.user_proxy_agent import create_user_proxy_with_orchestrator
+from auth.entra_auth import login, get_display_name
 
 # Load environment variables
 load_dotenv(override=True)
@@ -178,6 +180,29 @@ async def main_streaming():
 
 
 if __name__ == "__main__":
+    # ── Entra ID login ────────────────────────────────────────────────────────
+    # Authenticate the user before opening the chat loop.  Requires
+    # ENTRA_CLIENT_ID and ENTRA_TENANT_ID to be set in .env.
+    # Run infra/setup-entra-app.ps1 once to provision the app registration and
+    # populate those values automatically.
+    _client_id = os.getenv("ENTRA_CLIENT_ID", "")
+    _tenant_id = os.getenv("ENTRA_TENANT_ID", "")
+
+    if _client_id and _tenant_id:
+        try:
+            _auth_result = login(_tenant_id, _client_id)
+            _display_name = get_display_name(_auth_result)
+            # Store the Bearer token in env so the orchestrator can attach it
+            # to outbound APIM requests alongside the subscription key.
+            os.environ["ENTRA_ACCESS_TOKEN"] = _auth_result["access_token"]
+            print(f"\n👤  Signed in as: {_display_name}")
+        except RuntimeError as e:
+            print(f"\n⚠️   Entra login failed: {e}")
+            print("Continuing without user identity.\n")
+    else:
+        print("\nℹ️   ENTRA_CLIENT_ID / ENTRA_TENANT_ID not set — skipping login.")
+        print("    Run infra/setup-entra-app.ps1 to enable interactive login.\n")
+
     # Choose between streaming and non-streaming mode
     mode = input("Use streaming mode? [y/N]: ").strip().lower()
     

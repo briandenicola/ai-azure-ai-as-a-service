@@ -193,7 +193,7 @@ All tests route traffic through App Gateway WAF → APIM → Foundry. Run any sc
 
 ### Adding a new load test
 
-1. Add your JMX file to `tests/`.
+1. Add your JMX file to `load_tests/definitions/`.
 2. Add a `Register-AltTest` call in `scripts/configure-load-test.ps1` (the single owner of all test definitions).
 3. Add a `run-<name>.ps1` script that only fires the run (does not create the definition).
 4. Run `azd provision` — the new test definition will be created automatically.
@@ -426,7 +426,7 @@ docs/
 scripts/
   entra-id/                        Group and project provisioning scripts
 
-tests/
+load_tests/
   test-sdk-endpoint-routing.py
 ```
 

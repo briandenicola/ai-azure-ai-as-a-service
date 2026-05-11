@@ -1,4 +1,4 @@
-import os
+﻿import os
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
@@ -7,15 +7,18 @@ from github import Auth
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
-pat=os.getenv('GITHUB_PAT')
 
-if not pat:
-    raise ValueError("Github Personal Access Token (PAT) is not set in environment variables.")
+def _get_pat() -> str:
+    pat = os.getenv('GITHUB_PAT')
+    if not pat:
+        raise ValueError("GITHUB_PAT is not set. Add it to lobs/investment_platform/.env")
+    return pat
+
 
 class GitHubOperations():
     def get_repo_list_by_username(self, user_name: str) -> str:
         try:
-            g = Github(pat, per_page=100)
+            g = Github(_get_pat(), per_page=100)
             user=g.get_user(user_name)
 
             repo_list = []
@@ -32,7 +35,7 @@ class GitHubOperations():
     
     def get_file_content(self, repo: str) -> str:
         try:
-            g = Github(pat, per_page=100)
+            g = Github(_get_pat(), per_page=100)
             files= g.get_repo(repo).get_contents()
 
             file_list = []
@@ -49,7 +52,7 @@ class GitHubOperations():
             
     def get_file_list_by_repo(self, repo: str) -> str:
         try:
-            g = Github(pat, per_page=100)
+            g = Github(_get_pat(), per_page=100)
             repo = g.get_repo(repo)
             if not repo:
                 raise ValueError(f"Repository '{repo}' not found.")
@@ -83,7 +86,7 @@ class GitHubOperations():
 
     def get_file_content_by_repo_and_path(self, repo: str, file_path: str) -> str:
         try:
-            g = Github(pat, per_page=100)
+            g = Github(_get_pat(), per_page=100)
             repo = g.get_repo(repo)
             if not repo:
                 raise ValueError(f"Repository '{repo}' not found.")
@@ -102,7 +105,7 @@ class GitHubOperations():
 
     def search_code(self, query: str) -> List[str]:
         try:
-            g = Github(pat, per_page=100)
+            g = Github(_get_pat(), per_page=100)
             results = g.search_code(query=query)
             code_snippets = [result.code for result in results]
             return code_snippets
@@ -114,7 +117,7 @@ class GitHubOperations():
 
     def create_issue(self, repo: str, title: str, body: str) -> str:
         try:
-            g = Github(pat, per_page=100)
+            g = Github(_get_pat(), per_page=100)
             repository = g.get_repo(repo)
             if not repository:
                 raise ValueError(f"Repository '{repo}' not found.")
@@ -127,3 +130,4 @@ class GitHubOperations():
         finally:
             g.close()
     
+

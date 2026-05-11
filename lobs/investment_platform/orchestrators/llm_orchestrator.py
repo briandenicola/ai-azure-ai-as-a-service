@@ -140,21 +140,36 @@ class LLMOrchestrator:
                     )
                 return openai_client
             project_client.get_openai_client = _get_openai_with_apim_key
-        # Build a plain AsyncOpenAI client that authenticates to APIM using only
-        # the subscription key.  We cannot use project_client.get_openai_client()
-        # here because it injects a DefaultAzureCredential Bearer token in the
-        # Authorization header; the App Gateway WAF rejects the long JWT before the
-        # request reaches APIM.  APIM's openai-inference policy handles Foundry auth
-        # via managed identity — no Bearer token is needed from the client side.
+        # Build a plain AsyncOpenAI client that authenticates to APIM using the
+        # subscription key (always present) plus an optional user Entra Bearer token
+        # (present when the console app performs interactive login via chat.py).
+        # We cannot use project_client.get_openai_client() here because it injects
+        # a DefaultAzureCredential token — that is a service identity, not a user
+        # identity, and is not what the APIM validate-jwt policy expects.
         import httpx as _httpx
         from openai import AsyncOpenAI as _AsyncOpenAI
         _apim_base = project_endpoint.rstrip('/') + '/openai/'
+        # Build the default headers for every outbound APIM request.
+        # The subscription key is always required for quota/product routing.
+        # If the user authenticated via Entra (chat.py sets ENTRA_ACCESS_TOKEN),
+        # we also attach the Bearer token so APIM can log user identity and,
+        # optionally, validate the JWT via validate-jwt policy.
+        # The WAF Authorization-header exclusion (waf-appgw.bicep) allows JWTs
+        # through without triggering OWASP rules.
+        _default_headers: dict = {'Ocp-Apim-Subscription-Key': apim_key}
+        _access_token = os.getenv('ENTRA_ACCESS_TOKEN', '')
+        if _access_token:
+            _default_headers['Authorization'] = f'Bearer {_access_token}'
         _oi_client = _AsyncOpenAI(
             base_url=_apim_base,
             api_key=apim_key,
-            default_headers={'Ocp-Apim-Subscription-Key': apim_key},
+            default_headers=_default_headers,
             default_query={'api-version': '2025-03-01-preview'},
-            http_client=_httpx.AsyncClient(verify=ssl_verify),
+            timeout=60.0,
+            http_client=_httpx.AsyncClient(
+                verify=ssl_verify,
+                timeout=_httpx.Timeout(60.0),
+            ),
         )
         self._routing_openai_client = _oi_client
         self._routing_model = model_deployment_name

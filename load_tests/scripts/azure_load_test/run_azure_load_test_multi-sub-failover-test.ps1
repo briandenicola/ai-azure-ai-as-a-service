@@ -1,50 +1,53 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-  Run the steady-state load test — 1 hour, all four LOB subscriptions, low TPM.
+  Run the multi-subscription failover load test (Bronze + Silver, both trigger failover).
 
 .DESCRIPTION
-  Simulates realistic baseline traffic across all four LOB subscriptions
-  (Bronze + Silver x2 + Gold) for 1 hour.  Designed to produce smooth,
-  gap-free graphs in Azure Monitor without throttling or failover.
+  Combined test that exercises both Bronze and Silver subscriptions while generating
+  enough traffic to saturate the primary Foundry gpt-4o-mini TPM cap (1K TPM)
+  and trigger genuine APIM failover retries to the secondary endpoint.
 
-  Test suites (all run in parallel — 3600s / 1 hour total):
-    Suite 1  [Bronze]  Branch Advisor       — 2 threads, 30s think → ~4 RPM,  ~40 TPM
-    Suite 2  [Silver]  AML Screening        — 2 threads, 30s think → ~4 RPM,  ~40 TPM
-    Suite 3  [Silver]  Credit Underwriting  — 2 threads, 30s think → ~4 RPM,  ~40 TPM
-    Suite 4  [Gold]    Investment Platform  — 2 threads, 30s think → ~4 RPM,  ~40 TPM
+  Test suites (all run in parallel — 120s total):
+    Suite 1  [Bronze] Sustained  — 3 threads, 8s think → steady normal traffic
+    Suite 2  [Bronze] Blast      — 8 threads, 3s think, max_tokens=1 → TPM saturation
+    Suite 3  [Silver] Sustained  — 3 threads, 8s think → steady normal traffic
+    Suite 4  [Silver] Blast      — 8 threads, 3s think, max_tokens=1 → TPM saturation
 
-  Combined: ~160 TPM << Foundry 1K TPM primary cap — no throttling expected.
-  Graph coverage: ~19 data points per 5-minute bin per subscription — no gaps.
+  Expected outcome:
+    • Blast suites generate ~5400 combined TPM > 1K primary cap → 429s
+    • APIM failover-retry policy retries on secondary endpoint
+    • Both subscriptions see HTTP 200 (client-transparent retry)
+    • X-Backend-Region-Used: secondary-failover appears in both sub's responses
+    • tearDown sampler reports Bronze failover% and Silver failover% separately
 
-  Can run CONCURRENTLY with multi-sub-failover-test (different ALT test ID).
-
-  JMX:   tests/steady-state-test.jmx
-  ALT test ID: steady-state-test
+  JMX:   load_tests/definitions/multi-sub-failover-test.jmx
+  ALT test ID: multi-sub-failover-test
 
 .NOTES
   Prerequisites:
-    azd provision completed (App Gateway + APIM + Foundry deployed)
-    App Gateway and APIM operational
+    • azd provision completed (App Gateway + APIM + Foundry deployed)
+    • Primary gpt-4o-mini permanently at 1K TPM (see run-appgw-failover-test.ps1 notes)
+    • failover-retry.xml policy active on openai-inference API (provisioned by azd)
+    • App Gateway operational state: Running
 
-  To run both tests concurrently:
-    Start-Process pwsh -ArgumentList '-File', 'scripts/run-steady-state-test.ps1'
-    Start-Process pwsh -ArgumentList '-File', 'scripts/run-multi-sub-failover-test.ps1'
+  To check App Gateway state:
+    az network application-gateway list -g <RG> --query '[0].{name:name,state:operationalState}' -o table
 #>
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # ── Constants ───────────────────────────────────────────────────────────────────
-. "$PSScriptRoot/_resolve-env.ps1"
+. "$PSScriptRoot/../../../scripts/_resolve-env.ps1"
 
 $ALT_RG   = $RG
-$TEST_ID  = 'steady-state-test'
+$TEST_ID  = 'multi-sub-failover-test'
 
 $ALT_RESOURCE = az load list -g $RG --query '[0].name' -o tsv 2>$null
 if (-not $ALT_RESOURCE) { Write-Error "No Azure Load Testing resource found in '$RG'. Run: azd provision" }
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
+$repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 
 # ── Step 1: Verify App Gateway is running ───────────────────────────────────────
 Write-Host ""
@@ -66,7 +69,7 @@ if ($appgwState -ne 'Running') {
     Start-Sleep 30
 }
 
-# ── Step 2: Fetch APIM subscription keys ────────────────────────────────────────
+# ── Step 2: Get APIM keys for both Bronze and Silver ────────────────────────────
 Write-Host ""
 Write-Host "=== Step 2: Fetch APIM subscription keys ===" -ForegroundColor Cyan
 
@@ -95,16 +98,16 @@ $SILVER_KEY   = Invoke-ApimListSecrets 'app-aml-screening'
 $SILVER_KEY_2 = Invoke-ApimListSecrets 'app-credit-underwriting'
 $GOLD_KEY     = Invoke-ApimListSecrets 'app-investment-platform'
 
-Write-Host "  Bronze key (Branch Advisor):        $($BRONZE_KEY.Substring(0,8))..." -ForegroundColor Green
-Write-Host "  Silver key (AML Screening):         $($SILVER_KEY.Substring(0,8))..." -ForegroundColor Green
-Write-Host "  Silver key 2 (Credit Underwriting): $($SILVER_KEY_2.Substring(0,8))..." -ForegroundColor Green
-Write-Host "  Gold key (Investment Platform):     $($GOLD_KEY.Substring(0,8))..." -ForegroundColor Green
+Write-Host "  Bronze key (Branch Advisor):        $($BRONZE_KEY.Substring(0,8))... (60 RPM — sustained only)" -ForegroundColor Green
+Write-Host "  Silver key (AML Screening):         $($SILVER_KEY.Substring(0,8))... (300 RPM — blast safe)" -ForegroundColor Green
+Write-Host "  Silver key 2 (Credit Underwriting): $($SILVER_KEY_2.Substring(0,8))... (300 RPM — blast safe)" -ForegroundColor Green
+Write-Host "  Gold key (Investment Platform):     $($GOLD_KEY.Substring(0,8))... (5,500 TPM / 330 RPM — Gold tier)" -ForegroundColor Green
 
 # ── Step 3: Create / update ALT test definition ─────────────────────────────────
 Write-Host ""
 Write-Host "=== Step 3: Create / update ALT test '$TEST_ID' ===" -ForegroundColor Cyan
 
-$jmxPath = "$repoRoot\tests\steady-state-test.jmx"
+$jmxPath = "$repoRoot\load_tests\definitions\multi-sub-failover-test.jmx"
 if (-not (Test-Path $jmxPath)) {
     Write-Error "JMX not found: $jmxPath"
 }
@@ -125,8 +128,8 @@ if (-not $testExists) {
         "--load-test-resource", $ALT_RESOURCE,
         "-g", $ALT_RG,
         "--test-id", $TEST_ID,
-        "--display-name", "Steady State: All Subscriptions (1h)",
-        "--description", "Baseline steady-state traffic — 4 subs, 2 threads each, 30s think, 3600s; ~160 TPM combined, no failover expected",
+        "--display-name", "Multi-Sub Failover: Bronze+Silver+Gold",
+        "--description", "Bronze + Silver + Gold sustained + blast suites; all trigger APIM failover-retry policy",
         "--test-plan", $jmxPath,
         "--env", "APIM_HOSTNAME=$APPGW_FQDN",
         "--env", "API_VERSION=2024-10-21",
@@ -169,7 +172,8 @@ if (-not $testExists) {
 Write-Host ""
 Write-Host "=== Step 4: Upload test support files ===" -ForegroundColor Cyan
 
-$sysPropsPath = "$repoRoot\tests\appgw-system.properties"
+# appgw-system.properties — references the PKCS12 truststore (used if truststore is present)
+$sysPropsPath = "$repoRoot\load_tests\config\appgw-system.properties"
 if (Test-Path $sysPropsPath) {
     az load test file upload `
         --load-test-resource $ALT_RESOURCE -g $ALT_RG `
@@ -181,7 +185,7 @@ if (Test-Path $sysPropsPath) {
 
 # system.properties — JMeter auto-reads this at startup; trustStore=NONE trusts the
 # App Gateway self-signed cert without needing the PKCS12 truststore file.
-$sysPropsPath2 = "$repoRoot\tests\system.properties"
+$sysPropsPath2 = "$repoRoot\load_tests\config\system.properties"
 if (Test-Path $sysPropsPath2) {
     az load test file upload `
         --load-test-resource $ALT_RESOURCE -g $ALT_RG `
@@ -191,10 +195,12 @@ if (Test-Path $sysPropsPath2) {
     Write-Host "  Uploaded system.properties (trustStore=NONE)" -ForegroundColor Green
 }
 
-$userPropsPath = "$env:TEMP\steady-state-user.properties"
+# user.properties — both keys injected as USER_PROPERTIES so JMeter resolves
+# ${__P(BRONZE_KEY,)} / ${__P(SILVER_KEY,)} at startup before TestPlan evaluation.
+$userPropsPath = "$env:TEMP\multi-sub-failover-user.properties"
 @"
-# JMeter user properties for steady-state-test
-# Generated by run-steady-state-test.ps1 — DO NOT COMMIT (contains live API keys)
+# JMeter user properties for multi-sub-failover-test
+# Generated by run-multi-sub-failover-test.ps1 — DO NOT COMMIT (contains live API keys)
 APIM_HOSTNAME=$APPGW_FQDN
 API_VERSION=2024-10-21
 BRONZE_KEY=$BRONZE_KEY
@@ -208,18 +214,18 @@ az load test file upload `
     --test-id $TEST_ID `
     --path $userPropsPath `
     --file-type USER_PROPERTIES -o none
-Write-Host "  Uploaded user.properties" -ForegroundColor Green
+Write-Host "  Uploaded user.properties (BRONZE_KEY + SILVER_KEY via -q flag at JMeter startup)" -ForegroundColor Green
 
+# Remove temp file immediately — keys are now in ALT, not needed locally
 Remove-Item $userPropsPath -Force -ErrorAction SilentlyContinue
 
 # ── Step 5: Fire the test run ────────────────────────────────────────────────────
-$runId = "steady-state-$(Get-Date -Format 'yyyyMMddHHmmss')"
+$runId = "multi-sub-failover-$(Get-Date -Format 'yyyyMMddHHmmss')"
 Write-Host ""
 Write-Host "=== Step 5: Start test run '$runId' ===" -ForegroundColor Cyan
-Write-Host "  Suites: 4 subscriptions x 2 threads x 30s think time"
-Write-Host "  Duration: 3600s (1 hour)"
-Write-Host "  Combined TPM: ~160 — no throttling or failover expected"
-Write-Host "  Graph coverage: ~19 data points / 5-min bin / subscription"
+Write-Host "  Suites: Bronze-sustained(3t/8s) + Bronze-blast(8t/3s) + Silver-sustained(3t/8s) + Silver-blast(8t/3s)"
+Write-Host "  Duration: 600s (10 min) — blast suites generate ~5400 combined TPM > 1K primary cap"
+Write-Host "  Expected: primary 429s → APIM retries secondary → client sees 200 for both subs"
 Write-Host ""
 
 $createOk = $false
@@ -229,9 +235,10 @@ for ($attempt = 1; $attempt -le 3; $attempt++) {
         --load-test-resource $ALT_RESOURCE -g $ALT_RG `
         --test-id $TEST_ID `
         --test-run-id $runId `
-        --display-name "Steady state $(Get-Date -Format 'yyyy-MM-dd HH:mm')" `
+        --display-name "Multi-sub failover $(Get-Date -Format 'yyyy-MM-dd HH:mm')" `
         --no-wait -o none 2>&1 | Out-Null
     $ErrorActionPreference = 'Stop'
+    # Verify the run actually exists in ALT before proceeding
     $ErrorActionPreference = 'Continue'
     $checkJson = az load test-run show --load-test-resource $ALT_RESOURCE -g $ALT_RG `
         --test-run-id $runId -o json 2>$null | ConvertFrom-Json -ErrorAction SilentlyContinue
@@ -249,14 +256,15 @@ if (-not $createOk) {
     exit 1
 }
 
-# ── Step 6: Poll until done (max 90 min — 3600s test + ALT engine overhead) ─────
-Write-Host "  Polling every 30s for completion (max 90 min)..." -ForegroundColor Yellow
-$deadline   = (Get-Date).AddMinutes(90)
+# ── Step 6: Poll until done ──────────────────────────────────────────────────────
+Write-Host "  Polling for completion (max 10 min — 120s test + ALT engine overhead)..." -ForegroundColor Yellow
+$deadline  = (Get-Date).AddMinutes(18)
 $doneStates = @('DONE','FAILED','CANCELLED','SERVER_METRIC_NOT_APPLICABLE')
 $runStatus  = ''
 do {
-    Start-Sleep 30
+    Start-Sleep 20
     $ts = [datetime]::UtcNow.ToString('HH:mm:ss')
+    # Retry up to 3 times per poll cycle to handle transient SSL/network errors
     $runJson = $null
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         $ErrorActionPreference = 'Continue'
@@ -275,6 +283,8 @@ do {
         Write-Host "    ${ts}Z  (poll failed — SSL/network error, retrying next cycle)" -ForegroundColor Yellow
         continue
     }
+    # StrictMode is on globally — use PSObject.Properties to safely read fields
+    # that may be absent during ramp-up (virtualUsers, requestsPerSecond, etc.)
     Set-StrictMode -Off
     $runStatus = $runJson.status            ?? ''
     $vus       = $runJson.virtualUsers      ?? ''
@@ -312,30 +322,30 @@ $metricsBase = @("load", "test-run", "metrics", "list",
     "--test-run-id", $runId,
     "--metric-namespace", "LoadTestRunMetrics")
 
-$respAvg = Get-MetricAvg  (& az @($metricsBase + @("--metric-name","ResponseTime","--aggregation","Average"))       2>$null | ConvertFrom-Json)
-$respP90 = Get-MetricAvg  (& az @($metricsBase + @("--metric-name","ResponseTime","--aggregation","Percentile90"))  2>$null | ConvertFrom-Json)
-$errors  = Get-MetricTotal(& az @($metricsBase + @("--metric-name","Errors",       "--aggregation","Total"))        2>$null | ConvertFrom-Json)
+$respAvg = Get-MetricAvg  (& az @($metricsBase + @("--metric-name","ResponseTime","--aggregation","Average"))    2>$null | ConvertFrom-Json)
+$respP90 = Get-MetricAvg  (& az @($metricsBase + @("--metric-name","ResponseTime","--aggregation","Percentile90")) 2>$null | ConvertFrom-Json)
+$errors  = Get-MetricTotal(& az @($metricsBase + @("--metric-name","Errors","--aggregation","Total"))             2>$null | ConvertFrom-Json)
 $ErrorActionPreference = 'Stop'
 
-Write-Host "  +------------------------------------------------------------+"
-Write-Host "  |  Steady State Test  ($runId)"
-Write-Host "  +------------------------------------------------------------+"
+Write-Host "  +----------------------------------------------------------+"
+Write-Host "  |  Multi-Subscription Failover Test  ($runId)"
+Write-Host "  +----------------------------------------------------------+"
 Write-Host "  |  Status            : $($result.status)"
 Write-Host "  |  Test result       : $($result.testResult)"
 Write-Host "  |  Avg response time : $respAvg ms"
 Write-Host "  |  p90 response time : $respP90 ms"
-Write-Host "  |  Client errors     : $errors  (0 = expected)"
-Write-Host "  +------------------------------------------------------------+"
-Write-Host "  |  See '[Summary] Per-subscription baseline statistics'"
-Write-Host "  |  sampler in ALT results for per-subscription counts."
-Write-Host "  +------------------------------------------------------------+"
-Write-Host "  |  Log Analytics — verify primary routing:"
+Write-Host "  |  Client errors     : $errors  (0 = APIM retry transparent)"
+Write-Host "  +----------------------------------------------------------+"
+Write-Host "  |  See '[Summary] Per-subscription failover statistics'"
+Write-Host "  |  sampler in ALT results for Bronze% and Silver% failover."
+Write-Host "  +----------------------------------------------------------+"
+Write-Host "  |  Log Analytics — verify per-subscription failover:"
 Write-Host "  |    AppRequests"
-Write-Host "  |    | where TimeGenerated > ago(65m)"
+Write-Host "  |    | where TimeGenerated > ago(5m)"
 Write-Host "  |    | summarize"
 Write-Host "  |        Requests=count(),"
-Write-Host "  |        Primary=countif(tostring(Properties['Response-X-Backend-Region-Used']) == 'primary'),"
-Write-Host "  |        Failover=countif(tostring(Properties['Response-X-Backend-Region-Used']) contains 'secondary')"
+Write-Host "  |        Failover=countif(tostring(Properties['X-Backend-Region-Used']) contains 'secondary')"
 Write-Host "  |      by SubName=tostring(Properties['Subscription Name'])"
+Write-Host "  |    | extend FailoverPct = round(100.0 * Failover / Requests, 1)"
 Write-Host "  |    | order by SubName asc"
-Write-Host "  +------------------------------------------------------------+"
+Write-Host "  +----------------------------------------------------------+"

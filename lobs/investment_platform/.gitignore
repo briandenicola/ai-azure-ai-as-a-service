@@ -130,6 +130,7 @@ celerybeat.pid
 
 # Environments
 .env
+.token_cache.json
 .venv
 env/
 venv/

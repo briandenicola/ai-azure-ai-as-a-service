@@ -60,7 +60,7 @@ if (-not $APPGW_FQDN) {
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$testsDir  = Join-Path $repoRoot 'tests'
+$testsDir  = Join-Path $repoRoot 'load_tests'
 
 Write-Host ""
 Write-Host "==================================================================" -ForegroundColor Cyan
@@ -178,7 +178,7 @@ $pfx = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
 )
 
 # Export public cert (DER) — uploaded alongside JMX so JMeter can load it at test time
-$certDerPath = Join-Path $testsDir 'appgw-cert.cer'
+$certDerPath = Join-Path $testsDir 'config' 'appgw-cert.cer'
 [IO.File]::WriteAllBytes($certDerPath, $pfx.Export(
     [System.Security.Cryptography.X509Certificates.X509ContentType]::Cert
 ))
@@ -192,13 +192,13 @@ $tsBytes       = $truststore.Export(
     [System.Security.Cryptography.X509Certificates.X509ContentType]::Pkcs12,
     $tsPassword
 )
-$truststorePath = Join-Path $testsDir 'appgw-truststore.p12'
+$truststorePath = Join-Path $testsDir 'config' 'appgw-truststore.p12'
 [IO.File]::WriteAllBytes($truststorePath, $tsBytes)
 Write-Host "  PKCS12 truststore  → $truststorePath  (password: $tsPassword)" -ForegroundColor Green
 
 # Write jmeter system.properties that tells JMeter/Java to use this truststore
 # File is uploaded alongside the JMX; JMeter looks in its current directory first
-$syspropsPath = Join-Path $testsDir 'appgw-system.properties'
+$syspropsPath = Join-Path $testsDir 'config' 'appgw-system.properties'
 @"
 # JMeter system properties for AppGW load test — references the truststore uploaded
 # alongside the JMX as an ADDITIONAL_ARTIFACTS file in Azure Load Testing.
@@ -270,7 +270,7 @@ Write-Host ""
 Write-Host "  AppGW FQDN (available after provision):"
 Write-Host "    https://$APPGW_FQDN"
 Write-Host ""
-Write-Host "  Files written to tests/:"
+Write-Host "  Files written to load_tests/config/:"
 Write-Host "    appgw-cert.cer         — public cert (DER)"
 Write-Host "    appgw-truststore.p12   — PKCS12 truststore for JMeter"
 Write-Host "    appgw-system.properties — JMeter system props for ALT"

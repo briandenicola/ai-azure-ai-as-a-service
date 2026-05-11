@@ -7,7 +7,7 @@
   Overview of what this script does:
     1. Verify App Gateway is deployed.
     2. Fetch live APIM subscription keys.
-    3. Create / update ALT test 'appgw-failover-test' with failover-load-test.jmx.
+    3. Create / update ALT test 'appgw-failover-test' with definitions/failover-load-test.jmx.
     4. Upload system.properties (trustStore=NONE) and user.properties (keys).
     5. Fire the test run and poll until complete.
     6. Display results — including failover % from the JMeter tearDown sampler.
@@ -38,7 +38,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # ── Constants ───────────────────────────────────────────────────────────────────
-. "$PSScriptRoot/_resolve-env.ps1"
+. "$PSScriptRoot/../../../scripts/_resolve-env.ps1"
 
 $ALT_RG   = $RG
 $TEST_ID  = 'appgw-failover-test'
@@ -50,7 +50,7 @@ if (-not $ALT_RESOURCE) { Write-Error "No Azure Load Testing resource found in '
 # Primary gpt-4o-mini is permanently kept at 1K TPM — genuine 429s at test RPS.
 # Failover policy is provisioned by azd (infrastructure/bicep/apim-gateway.bicep).
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
+$repoRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 
 # ── Step 1: Verify App Gateway is deployed ──────────────────────────────────────
 Write-Host ""
@@ -106,7 +106,7 @@ if (-not $testExists) {
         "--test-id", $TEST_ID,
         "--display-name", "AppGW Failover Blast -- primary->secondary retry",
         "--description", "Saturates primary Foundry TPM cap; verifies APIM retries on secondary",
-        "--test-plan", "$repoRoot\tests\failover-load-test.jmx",
+        "--test-plan", "$repoRoot\load_tests\definitions\failover-load-test.jmx",
         "--env", "APIM_HOSTNAME=$APPGW_FQDN",
         "--env", "API_VERSION=2024-10-21",
         "--env", "SILVER_KEY=$SILVER_KEY",
@@ -121,7 +121,7 @@ if (-not $testExists) {
     az load test update `
         --load-test-resource $ALT_RESOURCE -g $ALT_RG `
         --test-id $TEST_ID `
-        --test-plan "$repoRoot\tests\failover-load-test.jmx" `
+        --test-plan "$repoRoot\load_tests\definitions\failover-load-test.jmx" `
         -o none
 
     foreach ($kv in @(
@@ -143,7 +143,7 @@ Write-Host ""
 Write-Host "=== Step 4: Upload test support files ===" -ForegroundColor Cyan
 
 # system.properties — trustStore=NONE so JMeter trusts the AppGW self-signed cert
-$sysPropsPath = "$repoRoot\tests\appgw-system.properties"
+$sysPropsPath = "$repoRoot\load_tests\config\appgw-system.properties"
 if (Test-Path $sysPropsPath) {
     az load test file upload `
         --load-test-resource $ALT_RESOURCE -g $ALT_RG `
@@ -153,7 +153,7 @@ if (Test-Path $sysPropsPath) {
     Write-Host "  Uploaded appgw-system.properties" -ForegroundColor Green
 }
 
-$sysPropsPath2 = "$repoRoot\tests\system.properties"
+$sysPropsPath2 = "$repoRoot\load_tests\config\system.properties"
 if (Test-Path $sysPropsPath2) {
     az load test file upload `
         --load-test-resource $ALT_RESOURCE -g $ALT_RG `

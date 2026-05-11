@@ -1,4 +1,4 @@
-{
+﻿{
   "version": "Notebook/1.0",
   "items": [
     {
@@ -54,325 +54,433 @@
     {
       "type": 1,
       "content": {
-        "json": "# AppGW → APIM → Foundry Backend Routing Report\n\nFull traffic flow from **Application Gateway WAF v2** through **APIM** to **Azure AI Foundry** backends. Use this workbook to:\n- See when the circuit breaker switches traffic between **Primary (East US)** and **Secondary (West US)** Foundry\n- Identify **why** a switch happened (429 throttling, 5xx errors, retry failover)\n- Compare end-to-end latency by backend and layer\n\n> **Circuit breaker policy** (from `circuit-breaker-multi-region.xml`): trips after **5 failures** (429 or ≥500) to primary within a 5-minute window. Resets automatically on successful responses."
+        "json": "# AppGW \u2192 APIM \u2192 Foundry Backend Routing Report\nFull traffic flow from **Application Gateway WAF v2** through **APIM** to **Azure AI Foundry** backends. Circuit breaker trips after **5 failures (429 or \u2265500) to primary** within a 5-minute window, then auto-resets on success."
       },
       "name": "text-header"
     },
 
     {
-      "type": 3,
+      "type": 11,
       "content": {
-        "version": "KqlItem/1.0",
-        "query": "union\n  (ApiManagementGatewayLogs | where TimeGenerated {TimeRange} | summarize Value=count() | extend Metric=\"Total Requests\", Sub=\"through APIM\"),\n  (ApiManagementGatewayLogs | where TimeGenerated {TimeRange} | where BackendUrl has \"primary\" | summarize Value=count() | extend Metric=\"Primary Backend\", Sub=\"Foundry East US\"),\n  (ApiManagementGatewayLogs | where TimeGenerated {TimeRange} | where BackendUrl has \"secondary\" | summarize Value=count() | extend Metric=\"Secondary Backend\", Sub=\"Foundry West US (failover)\"),\n  (ApiManagementGatewayLogs | where TimeGenerated {TimeRange} | where isnotempty(BackendUrl) and (ResponseCode >= 400 or BackendResponseCode >= 400) | summarize Value=count() | extend Metric=\"Backend Errors\", Sub=\"4xx / 5xx\")\n| project Metric, Value, Sub",
-        "size": 4,
-        "title": "Traffic Summary",
-        "queryType": 0,
-        "resourceType": "microsoft.operationalinsights/workspaces",
-        "crossComponentResources": [
-          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+        "version": "LinkItem/1.0",
+        "style": "tabs",
+        "links": [
+          {
+            "id": "tab-summary",
+            "cellValue": "tab",
+            "linkTarget": "parameter",
+            "linkLabel": "\ud83d\udcca Summary",
+            "subTarget": "summary",
+            "style": "link"
+          },
+          {
+            "id": "tab-switches",
+            "cellValue": "tab",
+            "linkTarget": "parameter",
+            "linkLabel": "\ud83d\udd00 Switch Events",
+            "subTarget": "switches",
+            "style": "link"
+          },
+          {
+            "id": "tab-detail",
+            "cellValue": "tab",
+            "linkTarget": "parameter",
+            "linkLabel": "\ud83d\udd0d Request Detail",
+            "subTarget": "detail",
+            "style": "link"
+          }
+        ]
+      },
+      "name": "tabs-control"
+    },
+
+    {
+      "type": 9,
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "parameters": [
+          {
+            "id": "tab-param",
+            "version": "KqlParameterItem/1.0",
+            "name": "tab",
+            "type": 1,
+            "isRequired": true,
+            "value": "summary"
+          }
         ],
-        "visualization": "tiles",
-        "tileSettings": {
-          "titleContent": { "columnMatch": "Metric", "formatter": 1 },
-          "leftContent":  { "columnMatch": "Value",  "formatter": 12, "formatOptions": { "palette": "auto" } },
-          "secondaryContent": { "columnMatch": "Sub", "formatter": 1 },
-          "showBorder": true,
-          "size": "auto"
-        }
-      },
-      "name": "query-kpis"
-    },
-
-    {
-      "type": 1,
-      "content": {
-        "json": "---\n## Backend Routing Timeline\nStacked area showing how many requests went to each backend per time interval. A solid block of **Secondary** traffic means the circuit breaker was open and all requests were failing over."
-      },
-      "name": "text-s1"
-    },
-
-    {
-      "type": 3,
-      "content": {
-        "version": "KqlItem/1.0",
-        "query": "ApiManagementGatewayLogs\n| where TimeGenerated {TimeRange}\n| extend Backend = case(\n    BackendUrl has \"primary\",   \"Primary (East US)\",\n    BackendUrl has \"secondary\", \"Secondary (West US)\",\n    isempty(BackendUrl),        \"No Backend (APIM-rejected)\",\n    \"Other\")\n| summarize Requests=count() by bin(TimeGenerated, {Granularity}), Backend",
-        "size": 0,
-        "title": "Requests per Backend",
+        "style": "above",
         "queryType": 0,
-        "resourceType": "microsoft.operationalinsights/workspaces",
-        "crossComponentResources": [
-          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
-        ],
-        "visualization": "areachart",
-        "chartSettings": {
-          "seriesLabelSettings": [
-            { "seriesName": "Primary (East US)",        "color": "green" },
-            { "seriesName": "Secondary (West US)",       "color": "orange" },
-            { "seriesName": "No Backend (APIM-rejected)", "color": "blue" }
-          ]
-        }
+        "resourceType": "microsoft.operationalinsights/workspaces"
       },
-      "name": "query-routing-timeline"
+      "name": "tab-state"
     },
 
     {
-      "type": 1,
+      "type": 12,
       "content": {
-        "json": "---\n## Backend Switch Events\nEach row is a point where traffic shifted to a different backend than the previous request. **Failover (primary → secondary)** means the circuit breaker tripped or a mid-request retry succeeded on secondary. **Recovery (secondary → primary)** means the circuit breaker reset.\n\n> Tip: sort by `TimeGenerated` and look at `LastErrorReason` / `BackendResponseCode` on the preceding rows in the detail table below to find what triggered the switch."
-      },
-      "name": "text-s2"
-    },
+        "version": "NotebookGroup/1.0",
+        "groupType": "editable",
+        "items": [
 
-    {
-      "type": 3,
-      "content": {
-        "version": "KqlItem/1.0",
-        "query": "ApiManagementGatewayLogs\n| where TimeGenerated {TimeRange}\n| where isnotempty(BackendUrl)\n| extend BackendRegion = iff(BackendUrl has \"primary\", \"primary\", iff(BackendUrl has \"secondary\", \"secondary\", \"other\"))\n| sort by TimeGenerated asc\n| extend PrevRegion = prev(BackendRegion, 1, \"\")\n| where BackendRegion != PrevRegion and PrevRegion != \"\"\n| extend Direction = case(\n    PrevRegion == \"primary\"   and BackendRegion == \"secondary\" and (ResponseCode == 429 or ResponseCode >= 500), \"🔴 Failover: primary → secondary (error re-routed)\",\n    PrevRegion == \"primary\"   and BackendRegion == \"secondary\", \"🔴 Failover: primary → secondary\",\n    PrevRegion == \"secondary\" and BackendRegion == \"primary\"   and (ResponseCode == 429 or ResponseCode >= 500), \"🟡 Recovery attempt: secondary → primary (failed — re-tripped)\",\n    PrevRegion == \"secondary\" and BackendRegion == \"primary\",   \"🟢 Recovery: secondary → primary (successful)\",\n    strcat(PrevRegion, \" → \", BackendRegion))\n| project\n    TimeGenerated,\n    Direction,\n    ResponseCode,\n    BackendResponseCode,\n    ['TotalTime (ms)']   = TotalTime,\n    ['BackendTime (ms)'] = BackendTime,\n    LastErrorReason,\n    LastErrorMessage,\n    ApimSubscriptionId\n| order by TimeGenerated desc",
-        "size": 0,
-        "title": "Backend Switch Events",
-        "queryType": 0,
-        "resourceType": "microsoft.operationalinsights/workspaces",
-        "crossComponentResources": [
-          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
-        ],
-        "visualization": "table",
-        "gridSettings": {
-          "filter": true,
-          "sortBy": [{ "itemKey": "TimeGenerated", "sortOrder": 2 }],
-          "formatters": [
-            {
-              "columnMatch": "ResponseCode",
-              "formatter": 18,
-              "formatOptions": {
-                "thresholdsOptions": "icons",
-                "thresholdsGrid": [
-                  { "operator": "<",       "thresholdValue": "300",  "representation": "success", "text": "{0}{1}" },
-                  { "operator": "<",       "thresholdValue": "500",  "representation": "warning", "text": "{0}{1}" },
-                  { "operator": "Default", "thresholdValue": null,   "representation": "error",   "text": "{0}{1}" }
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "union\n  (ApiManagementGatewayLogs | where TimeGenerated {TimeRange} | summarize Value=count() | extend Metric=\"Total Requests\", Sub=\"through APIM\"),\n  (ApiManagementGatewayLogs | where TimeGenerated {TimeRange} | where BackendUrl has \"primary\" | summarize Value=count() | extend Metric=\"Primary Backend\", Sub=\"Foundry East US\"),\n  (ApiManagementGatewayLogs | where TimeGenerated {TimeRange} | where BackendUrl has \"secondary\" | summarize Value=count() | extend Metric=\"Secondary Backend\", Sub=\"Foundry West US (failover)\"),\n  (ApiManagementGatewayLogs | where TimeGenerated {TimeRange} | where isnotempty(BackendUrl) and (ResponseCode >= 400 or BackendResponseCode >= 400) | summarize Value=count() | extend Metric=\"Backend Errors\", Sub=\"4xx / 5xx\")\n| project Metric, Value, Sub",
+              "size": 4,
+              "title": "Traffic Summary",
+              "queryType": 0,
+              "resourceType": "microsoft.operationalinsights/workspaces",
+              "crossComponentResources": [
+                "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+              ],
+              "visualization": "tiles",
+              "tileSettings": {
+                "titleContent": { "columnMatch": "Metric", "formatter": 1 },
+                "leftContent":  { "columnMatch": "Value",  "formatter": 12, "formatOptions": { "palette": "auto" } },
+                "secondaryContent": { "columnMatch": "Sub", "formatter": 1 },
+                "showBorder": true,
+                "size": "auto"
+              }
+            },
+            "name": "query-kpis"
+          },
+
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "ApiManagementGatewayLogs\n| where TimeGenerated {TimeRange}\n| extend Backend = case(\n    BackendUrl has \"primary\",   \"Primary (East US)\",\n    BackendUrl has \"secondary\", \"Secondary (West US)\",\n    isempty(BackendUrl),        \"No Backend (APIM-rejected)\",\n    \"Other\")\n| summarize Requests=count() by bin(TimeGenerated, {Granularity}), Backend",
+              "size": 0,
+              "title": "Backend Routing Timeline \u2014 stacked area (solid orange = circuit breaker open)",
+              "queryType": 0,
+              "resourceType": "microsoft.operationalinsights/workspaces",
+              "crossComponentResources": [
+                "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+              ],
+              "visualization": "areachart",
+              "chartSettings": {
+                "seriesLabelSettings": [
+                  { "seriesName": "Primary (East US)",         "color": "green" },
+                  { "seriesName": "Secondary (West US)",        "color": "orange" },
+                  { "seriesName": "No Backend (APIM-rejected)", "color": "blue" }
                 ]
               }
             },
-            {
-              "columnMatch": "BackendResponseCode",
-              "formatter": 18,
-              "formatOptions": {
-                "thresholdsOptions": "icons",
-                "thresholdsGrid": [
-                  { "operator": "<",       "thresholdValue": "300",  "representation": "success", "text": "{0}{1}" },
-                  { "operator": "<",       "thresholdValue": "500",  "representation": "warning", "text": "{0}{1}" },
-                  { "operator": "Default", "thresholdValue": null,   "representation": "error",   "text": "{0}{1}" }
+            "name": "query-routing-timeline"
+          },
+
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "ApiManagementGatewayLogs\n| where TimeGenerated {TimeRange}\n| where BackendUrl has \"primary\"\n| where ResponseCode >= 400 or BackendResponseCode >= 400\n| summarize FailuresToPrimary=count() by bin(TimeGenerated, 1m)\n| extend CircuitBreakerThreshold = 5\n| order by TimeGenerated asc",
+              "size": 1,
+              "title": "Primary Backend Failures per Minute \u2014 bars above 5 = circuit breaker tripped",
+              "queryType": 0,
+              "resourceType": "microsoft.operationalinsights/workspaces",
+              "crossComponentResources": [
+                "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+              ],
+              "visualization": "barchart",
+              "chartSettings": {
+                "seriesLabelSettings": [
+                  { "seriesName": "FailuresToPrimary",       "color": "orange" },
+                  { "seriesName": "CircuitBreakerThreshold", "color": "red" }
                 ]
               }
             },
-            {
-              "columnMatch": "TotalTime (ms)",
-              "formatter": 8,
-              "formatOptions": { "palette": "redGreen", "max": 3000 },
-              "numberFormat": { "unit": 23, "options": { "style": "decimal", "maximumFractionDigits": 0 } }
-            },
-            {
-              "columnMatch": "BackendTime (ms)",
-              "formatter": 8,
-              "formatOptions": { "palette": "yellowOrangeRed", "max": 2000 },
-              "numberFormat": { "unit": 23, "options": { "style": "decimal", "maximumFractionDigits": 0 } }
-            }
-          ]
-        }
-      },
-      "name": "query-switch-events"
-    },
+            "customWidth": "50",
+            "name": "query-cb-pressure"
+          },
 
-    {
-      "type": 1,
-      "content": {
-        "json": "---\n## Circuit Breaker Pressure\nLeft — **failures per minute to the primary backend** (bars exceed threshold = circuit breaker trips).  Right — **error rate %** per backend over the selected window."
-      },
-      "name": "text-s3"
-    },
-
-    {
-      "type": 3,
-      "content": {
-        "version": "KqlItem/1.0",
-        "query": "ApiManagementGatewayLogs\n| where TimeGenerated {TimeRange}\n| where BackendUrl has \"primary\"\n| where ResponseCode >= 400 or BackendResponseCode >= 400\n| summarize FailuresToPrimary=count() by bin(TimeGenerated, 1m)\n| extend CircuitBreakerThreshold = 5\n| order by TimeGenerated asc",
-        "size": 1,
-        "title": "Primary Backend Failures per Minute  (circuit breaker threshold = 5)",
-        "queryType": 0,
-        "resourceType": "microsoft.operationalinsights/workspaces",
-        "crossComponentResources": [
-          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
-        ],
-        "visualization": "barchart",
-        "chartSettings": {
-          "seriesLabelSettings": [
-            { "seriesName": "FailuresToPrimary",       "color": "orange" },
-            { "seriesName": "CircuitBreakerThreshold", "color": "red"    }
-          ]
-        }
-      },
-      "customWidth": "50",
-      "name": "query-cb-pressure"
-    },
-
-    {
-      "type": 3,
-      "content": {
-        "version": "KqlItem/1.0",
-        "query": "ApiManagementGatewayLogs\n| where TimeGenerated {TimeRange}\n| where isnotempty(BackendUrl)\n| extend BackendRegion = iff(BackendUrl has \"primary\", \"Primary (East US)\", iff(BackendUrl has \"secondary\", \"Secondary (West US)\", \"Other\"))\n| summarize Total=count(), Errors=countif(ResponseCode >= 400 or BackendResponseCode >= 400) by bin(TimeGenerated, {Granularity}), BackendRegion\n| extend ErrorPct = round(100.0 * Errors / Total, 1)\n| project TimeGenerated, BackendRegion, ErrorPct",
-        "size": 1,
-        "title": "Error Rate % by Backend",
-        "queryType": 0,
-        "resourceType": "microsoft.operationalinsights/workspaces",
-        "crossComponentResources": [
-          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
-        ],
-        "visualization": "linechart",
-        "chartSettings": {
-          "seriesLabelSettings": [
-            { "seriesName": "Primary (East US)",  "color": "green"  },
-            { "seriesName": "Secondary (West US)", "color": "orange" }
-          ]
-        }
-      },
-      "customWidth": "50",
-      "name": "query-error-rate"
-    },
-
-    {
-      "type": 1,
-      "content": {
-        "json": "---\n## End-to-End Latency Chain\nThe three latency layers:\n- **AppGW P50 (ms)** — total time the client experiences (AppGW `TimeTaken`, includes WAF inspection + APIM + Foundry)\n- **APIM Total P50 (ms)** — APIM's `TotalTime` (policy execution + Foundry round-trip)\n- **Backend P50 (ms)** — APIM's `BackendTime` (pure Foundry response time)\n\n**AppGW overhead** = AppGW P50 − APIM P50 (WAF + AppGW routing). **APIM policy overhead** = APIM Total − Backend. A spike in Backend with flat APIM overhead → Foundry is the bottleneck. Flat backend with rising APIM overhead → APIM policy issue."
-      },
-      "name": "text-s4"
-    },
-
-    {
-      "type": 3,
-      "content": {
-        "version": "KqlItem/1.0",
-        "query": "let apim = ApiManagementGatewayLogs\n| where TimeGenerated {TimeRange}\n| where isnotempty(BackendUrl)\n| summarize\n    ['APIM Total P50 (ms)']   = percentile(TotalTime,   50),\n    ['APIM Total P90 (ms)']   = percentile(TotalTime,   90),\n    ['Backend (Foundry) P50 (ms)'] = percentile(BackendTime, 50),\n    ['Backend (Foundry) P90 (ms)'] = percentile(BackendTime, 90)\n  by bin(TimeGenerated, {Granularity});\nlet agw = AGWAccessLogs\n| where TimeGenerated {TimeRange}\n| summarize\n    ['AppGW P50 (ms)'] = round(percentile(TimeTaken, 50) * 1000, 0),\n    ['AppGW P90 (ms)'] = round(percentile(TimeTaken, 90) * 1000, 0)\n  by bin(TimeGenerated, {Granularity});\nagw\n| join kind=leftouter (apim) on TimeGenerated\n| project-away TimeGenerated1\n| order by TimeGenerated asc",
-        "size": 0,
-        "title": "Full Chain Latency: AppGW → APIM → Foundry  (P50 and P90, ms)",
-        "queryType": 0,
-        "resourceType": "microsoft.operationalinsights/workspaces",
-        "crossComponentResources": [
-          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
-        ],
-        "visualization": "linechart",
-        "chartSettings": {
-          "seriesLabelSettings": [
-            { "seriesName": "AppGW P50 (ms)",              "color": "purple" },
-            { "seriesName": "AppGW P90 (ms)",              "color": "lightPurple" },
-            { "seriesName": "APIM Total P50 (ms)",         "color": "blue" },
-            { "seriesName": "APIM Total P90 (ms)",         "color": "lightBlue" },
-            { "seriesName": "Backend (Foundry) P50 (ms)",  "color": "green" },
-            { "seriesName": "Backend (Foundry) P90 (ms)",  "color": "lightGreen" }
-          ]
-        }
-      },
-      "name": "query-chain-latency"
-    },
-
-    {
-      "type": 3,
-      "content": {
-        "version": "KqlItem/1.0",
-        "query": "ApiManagementGatewayLogs\n| where TimeGenerated {TimeRange}\n| where isnotempty(BackendUrl)\n| extend BackendRegion = iff(BackendUrl has \"primary\", \"Primary (East US)\", iff(BackendUrl has \"secondary\", \"Secondary (West US)\", \"Other\"))\n| summarize\n    ['P50 Total (ms)']   = percentile(TotalTime,   50),\n    ['P90 Total (ms)']   = percentile(TotalTime,   90),\n    ['P50 Backend (ms)'] = percentile(BackendTime, 50),\n    ['P90 Backend (ms)'] = percentile(BackendTime, 90)\n  by bin(TimeGenerated, {Granularity}), BackendRegion",
-        "size": 0,
-        "title": "APIM Latency by Backend — P50 / P90 (ms)",
-        "queryType": 0,
-        "resourceType": "microsoft.operationalinsights/workspaces",
-        "crossComponentResources": [
-          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
-        ],
-        "visualization": "linechart",
-        "chartSettings": {
-          "seriesLabelSettings": [
-            { "seriesName": "Primary (East US)",  "color": "green"  },
-            { "seriesName": "Secondary (West US)", "color": "orange" }
-          ]
-        }
-      },
-      "name": "query-latency-by-backend"
-    },
-
-    {
-      "type": 1,
-      "content": {
-        "json": "---\n## Full Request Chain Detail\nIndividual requests with full routing information. `CallerIpAddress` is the AppGW internal IP (`10.100.1.x`). `BackendResponseCode` is what Foundry returned before any APIM transformation; `ResponseCode` is what the client received. Use `CorrelationId` to trace a specific request across APIM trace logs.\n\n> Filter the table by `BackendRegion` or `ResponseCode` to isolate failover requests."
-      },
-      "name": "text-s5"
-    },
-
-    {
-      "type": 3,
-      "content": {
-        "version": "KqlItem/1.0",
-        "query": "ApiManagementGatewayLogs\n| where TimeGenerated {TimeRange}\n| where isnotempty(BackendUrl)\n| extend BackendRegion = iff(BackendUrl has \"primary\", \"Primary (East US)\", iff(BackendUrl has \"secondary\", \"Secondary (West US)\", \"Other\"))\n| extend FailoverOccurred = iff(BackendUrl has \"secondary\" and BackendResponseCode == 200, \"Yes\", \"\")\n| project\n    TimeGenerated,\n    BackendRegion,\n    FailoverOccurred,\n    ApimSubscriptionId,\n    ResponseCode,\n    BackendResponseCode,\n    ['TotalTime (ms)']   = TotalTime,\n    ['BackendTime (ms)'] = BackendTime,\n    IsRequestSuccess,\n    LastErrorReason,\n    LastErrorMessage,\n    CallerIpAddress,\n    CorrelationId\n| order by TimeGenerated desc\n| limit 500",
-        "size": 0,
-        "title": "Full Request Chain — AppGW → APIM → Foundry (latest 500 requests)",
-        "queryType": 0,
-        "resourceType": "microsoft.operationalinsights/workspaces",
-        "crossComponentResources": [
-          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
-        ],
-        "visualization": "table",
-        "gridSettings": {
-          "filter": true,
-          "sortBy": [{ "itemKey": "TimeGenerated", "sortOrder": 2 }],
-          "formatters": [
-            {
-              "columnMatch": "BackendRegion",
-              "formatter": 18,
-              "formatOptions": {
-                "thresholdsOptions": "icons",
-                "thresholdsGrid": [
-                  { "operator": "==",      "thresholdValue": "Primary (East US)",  "representation": "success", "text": "{0}{1}" },
-                  { "operator": "Default", "thresholdValue": null,                 "representation": "warning", "text": "{0}{1}" }
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "ApiManagementGatewayLogs\n| where TimeGenerated {TimeRange}\n| where isnotempty(BackendUrl)\n| extend BackendRegion = iff(BackendUrl has \"primary\", \"Primary (East US)\", iff(BackendUrl has \"secondary\", \"Secondary (West US)\", \"Other\"))\n| summarize Total=count(), Errors=countif(ResponseCode >= 400 or BackendResponseCode >= 400) by bin(TimeGenerated, {Granularity}), BackendRegion\n| extend ErrorPct = round(100.0 * Errors / Total, 1)\n| project TimeGenerated, BackendRegion, ErrorPct",
+              "size": 1,
+              "title": "Error Rate % by Backend",
+              "queryType": 0,
+              "resourceType": "microsoft.operationalinsights/workspaces",
+              "crossComponentResources": [
+                "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+              ],
+              "visualization": "linechart",
+              "chartSettings": {
+                "seriesLabelSettings": [
+                  { "seriesName": "Primary (East US)",   "color": "green" },
+                  { "seriesName": "Secondary (West US)",  "color": "orange" }
                 ]
               }
             },
-            {
-              "columnMatch": "ResponseCode",
-              "formatter": 18,
-              "formatOptions": {
-                "thresholdsOptions": "icons",
-                "thresholdsGrid": [
-                  { "operator": "<",       "thresholdValue": "300",  "representation": "success", "text": "{0}{1}" },
-                  { "operator": "<",       "thresholdValue": "500",  "representation": "warning", "text": "{0}{1}" },
-                  { "operator": "Default", "thresholdValue": null,   "representation": "error",   "text": "{0}{1}" }
+            "customWidth": "50",
+            "name": "query-error-rate"
+          },
+
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "let apim = ApiManagementGatewayLogs\n| where TimeGenerated {TimeRange}\n| where isnotempty(BackendUrl)\n| summarize\n    ['APIM Total P50 (ms)']        = percentile(TotalTime,   50),\n    ['APIM Total P90 (ms)']        = percentile(TotalTime,   90),\n    ['Backend (Foundry) P50 (ms)'] = percentile(BackendTime, 50),\n    ['Backend (Foundry) P90 (ms)'] = percentile(BackendTime, 90)\n  by bin(TimeGenerated, {Granularity});\nlet agw = AGWAccessLogs\n| where TimeGenerated {TimeRange}\n| summarize\n    ['AppGW P50 (ms)'] = round(percentile(TimeTaken, 50) * 1000, 0),\n    ['AppGW P90 (ms)'] = round(percentile(TimeTaken, 90) * 1000, 0)\n  by bin(TimeGenerated, {Granularity});\nagw\n| join kind=leftouter (apim) on TimeGenerated\n| project-away TimeGenerated1\n| order by TimeGenerated asc",
+              "size": 0,
+              "title": "End-to-End Latency Chain: AppGW \u2192 APIM \u2192 Foundry (P50 / P90 ms) \u2014 Backend spike = Foundry bottleneck; APIM spike = policy issue",
+              "queryType": 0,
+              "resourceType": "microsoft.operationalinsights/workspaces",
+              "crossComponentResources": [
+                "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+              ],
+              "visualization": "linechart",
+              "chartSettings": {
+                "seriesLabelSettings": [
+                  { "seriesName": "AppGW P50 (ms)",              "color": "purple" },
+                  { "seriesName": "AppGW P90 (ms)",              "color": "lightPurple" },
+                  { "seriesName": "APIM Total P50 (ms)",         "color": "blue" },
+                  { "seriesName": "APIM Total P90 (ms)",         "color": "lightBlue" },
+                  { "seriesName": "Backend (Foundry) P50 (ms)",  "color": "green" },
+                  { "seriesName": "Backend (Foundry) P90 (ms)",  "color": "lightGreen" }
                 ]
               }
             },
-            {
-              "columnMatch": "BackendResponseCode",
-              "formatter": 18,
-              "formatOptions": {
-                "thresholdsOptions": "icons",
-                "thresholdsGrid": [
-                  { "operator": "<",       "thresholdValue": "300",  "representation": "success", "text": "{0}{1}" },
-                  { "operator": "<",       "thresholdValue": "500",  "representation": "warning", "text": "{0}{1}" },
-                  { "operator": "Default", "thresholdValue": null,   "representation": "error",   "text": "{0}{1}" }
+            "name": "query-chain-latency"
+          },
+
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "ApiManagementGatewayLogs\n| where TimeGenerated {TimeRange}\n| where isnotempty(BackendUrl)\n| extend BackendRegion = iff(BackendUrl has \"primary\", \"Primary (East US)\", iff(BackendUrl has \"secondary\", \"Secondary (West US)\", \"Other\"))\n| summarize\n    ['P50 Total (ms)']   = percentile(TotalTime,   50),\n    ['P90 Total (ms)']   = percentile(TotalTime,   90),\n    ['P50 Backend (ms)'] = percentile(BackendTime, 50),\n    ['P90 Backend (ms)'] = percentile(BackendTime, 90)\n  by bin(TimeGenerated, {Granularity}), BackendRegion",
+              "size": 0,
+              "title": "APIM Latency by Backend \u2014 P50 / P90 (ms)",
+              "queryType": 0,
+              "resourceType": "microsoft.operationalinsights/workspaces",
+              "crossComponentResources": [
+                "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+              ],
+              "visualization": "linechart",
+              "chartSettings": {
+                "seriesLabelSettings": [
+                  { "seriesName": "Primary (East US)",   "color": "green" },
+                  { "seriesName": "Secondary (West US)",  "color": "orange" }
                 ]
               }
             },
-            {
-              "columnMatch": "TotalTime (ms)",
-              "formatter": 8,
-              "formatOptions": { "palette": "coldHot", "max": 3000 },
-              "numberFormat": { "unit": 23, "options": { "style": "decimal", "maximumFractionDigits": 0 } }
-            },
-            {
-              "columnMatch": "BackendTime (ms)",
-              "formatter": 8,
-              "formatOptions": { "palette": "yellowOrangeRed", "max": 2000 },
-              "numberFormat": { "unit": 23, "options": { "style": "decimal", "maximumFractionDigits": 0 } }
-            }
-          ]
-        }
+            "name": "query-latency-by-backend"
+          }
+
+        ]
       },
-      "name": "query-chain-detail"
+      "conditionalVisibility": {
+        "parameterName": "tab",
+        "comparison": "isEqualTo",
+        "value": "summary"
+      },
+      "name": "group-summary"
+    },
+
+    {
+      "type": 12,
+      "content": {
+        "version": "NotebookGroup/1.0",
+        "groupType": "editable",
+        "items": [
+
+          {
+            "type": 1,
+            "content": {
+              "json": "Each row is a point where traffic shifted to a different backend. **Failover (primary \u2192 secondary)** = circuit breaker tripped or mid-request retry. **Recovery (secondary \u2192 primary)** = circuit breaker reset. Sort by `TimeGenerated` and look at `LastErrorReason` / `BackendResponseCode` on preceding rows to find the trigger."
+            },
+            "name": "text-switches-hint"
+          },
+
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "ApiManagementGatewayLogs\n| where TimeGenerated {TimeRange}\n| where isnotempty(BackendUrl)\n| extend BackendRegion = iff(BackendUrl has \"primary\", \"primary\", iff(BackendUrl has \"secondary\", \"secondary\", \"other\"))\n| sort by TimeGenerated asc\n| extend PrevRegion = prev(BackendRegion, 1, \"\")\n| where BackendRegion != PrevRegion and PrevRegion != \"\"\n| extend Direction = case(\n    PrevRegion == \"primary\"   and BackendRegion == \"secondary\" and (ResponseCode == 429 or ResponseCode >= 500), \"\ud83d\udd34 Failover: primary \u2192 secondary (error re-routed)\",\n    PrevRegion == \"primary\"   and BackendRegion == \"secondary\", \"\ud83d\udd34 Failover: primary \u2192 secondary\",\n    PrevRegion == \"secondary\" and BackendRegion == \"primary\"   and (ResponseCode == 429 or ResponseCode >= 500), \"\ud83d\udfe1 Recovery attempt: secondary \u2192 primary (failed \u2014 re-tripped)\",\n    PrevRegion == \"secondary\" and BackendRegion == \"primary\",   \"\ud83d\udfe2 Recovery: secondary \u2192 primary (successful)\",\n    strcat(PrevRegion, \" \u2192 \", BackendRegion))\n| project\n    TimeGenerated,\n    Direction,\n    ResponseCode,\n    BackendResponseCode,\n    ['TotalTime (ms)']   = TotalTime,\n    ['BackendTime (ms)'] = BackendTime,\n    LastErrorReason,\n    LastErrorMessage,\n    ApimSubscriptionId\n| order by TimeGenerated desc",
+              "size": 1,
+              "title": "Backend Switch Events",
+              "queryType": 0,
+              "resourceType": "microsoft.operationalinsights/workspaces",
+              "crossComponentResources": [
+                "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+              ],
+              "visualization": "table",
+              "gridSettings": {
+                "filter": true,
+                "rowLimit": 1000,
+                "sortBy": [{ "itemKey": "TimeGenerated", "sortOrder": 2 }],
+                "formatters": [
+                  {
+                    "columnMatch": "ResponseCode",
+                    "formatter": 18,
+                    "formatOptions": {
+                      "thresholdsOptions": "icons",
+                      "thresholdsGrid": [
+                        { "operator": "<",       "thresholdValue": "300",  "representation": "success", "text": "{0}{1}" },
+                        { "operator": "<",       "thresholdValue": "500",  "representation": "warning", "text": "{0}{1}" },
+                        { "operator": "Default", "thresholdValue": null,   "representation": "error",   "text": "{0}{1}" }
+                      ]
+                    }
+                  },
+                  {
+                    "columnMatch": "BackendResponseCode",
+                    "formatter": 18,
+                    "formatOptions": {
+                      "thresholdsOptions": "icons",
+                      "thresholdsGrid": [
+                        { "operator": "<",       "thresholdValue": "300",  "representation": "success", "text": "{0}{1}" },
+                        { "operator": "<",       "thresholdValue": "500",  "representation": "warning", "text": "{0}{1}" },
+                        { "operator": "Default", "thresholdValue": null,   "representation": "error",   "text": "{0}{1}" }
+                      ]
+                    }
+                  },
+                  {
+                    "columnMatch": "TotalTime (ms)",
+                    "formatter": 8,
+                    "formatOptions": { "palette": "redGreen", "max": 3000 },
+                    "numberFormat": { "unit": 23, "options": { "style": "decimal", "maximumFractionDigits": 0 } }
+                  },
+                  {
+                    "columnMatch": "BackendTime (ms)",
+                    "formatter": 8,
+                    "formatOptions": { "palette": "yellowOrangeRed", "max": 2000 },
+                    "numberFormat": { "unit": 23, "options": { "style": "decimal", "maximumFractionDigits": 0 } }
+                  }
+                ]
+              }
+            },
+            "name": "query-switch-events"
+          }
+
+        ]
+      },
+      "conditionalVisibility": {
+        "parameterName": "tab",
+        "comparison": "isEqualTo",
+        "value": "switches"
+      },
+      "name": "group-switches"
+    },
+
+    {
+      "type": 12,
+      "content": {
+        "version": "NotebookGroup/1.0",
+        "groupType": "editable",
+        "items": [
+
+          {
+            "type": 1,
+            "content": {
+              "json": "`CallerIpAddress` is the AppGW internal IP (`10.100.1.x`). `BackendResponseCode` is what Foundry returned before any APIM transformation; `ResponseCode` is what the client received. Click **\ud83d\udd0d Trace** to open the End-to-End Trace workbook filtered to that correlation ID."
+            },
+            "name": "text-detail-hint"
+          },
+
+          {
+            "type": 3,
+            "content": {
+              "version": "KqlItem/1.0",
+              "query": "ApiManagementGatewayLogs\n| where TimeGenerated {TimeRange}\n| where isnotempty(BackendUrl)\n| extend BackendRegion = iff(BackendUrl has \"primary\", \"Primary (East US)\", iff(BackendUrl has \"secondary\", \"Secondary (West US)\", \"Other\"))\n| extend FailoverOccurred = iff(BackendUrl has \"secondary\" and BackendResponseCode == 200, \"Yes\", \"\")\n| project\n    TimeGenerated,\n    BackendRegion,\n    FailoverOccurred,\n    ApimSubscriptionId,\n    ResponseCode,\n    BackendResponseCode,\n    ['TotalTime (ms)']   = TotalTime,\n    ['BackendTime (ms)'] = BackendTime,\n    IsRequestSuccess,\n    LastErrorReason,\n    LastErrorMessage,\n    CallerIpAddress,\n    CorrelationId\n| order by TimeGenerated desc\n| limit 500",
+              "size": 1,
+              "title": "Full Request Chain \u2014 AppGW \u2192 APIM \u2192 Foundry (latest 500 requests)",
+              "queryType": 0,
+              "resourceType": "microsoft.operationalinsights/workspaces",
+              "crossComponentResources": [
+                "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+              ],
+              "visualization": "table",
+              "gridSettings": {
+                "filter": true,
+                "rowLimit": 500,
+                "sortBy": [{ "itemKey": "TimeGenerated", "sortOrder": 2 }],
+                "formatters": [
+                  {
+                    "columnMatch": "BackendRegion",
+                    "formatter": 18,
+                    "formatOptions": {
+                      "thresholdsOptions": "icons",
+                      "thresholdsGrid": [
+                        { "operator": "==",      "thresholdValue": "Primary (East US)",  "representation": "success", "text": "{0}{1}" },
+                        { "operator": "Default", "thresholdValue": null,                 "representation": "warning", "text": "{0}{1}" }
+                      ]
+                    }
+                  },
+                  {
+                    "columnMatch": "ResponseCode",
+                    "formatter": 18,
+                    "formatOptions": {
+                      "thresholdsOptions": "icons",
+                      "thresholdsGrid": [
+                        { "operator": "<",       "thresholdValue": "300",  "representation": "success", "text": "{0}{1}" },
+                        { "operator": "<",       "thresholdValue": "500",  "representation": "warning", "text": "{0}{1}" },
+                        { "operator": "Default", "thresholdValue": null,   "representation": "error",   "text": "{0}{1}" }
+                      ]
+                    }
+                  },
+                  {
+                    "columnMatch": "BackendResponseCode",
+                    "formatter": 18,
+                    "formatOptions": {
+                      "thresholdsOptions": "icons",
+                      "thresholdsGrid": [
+                        { "operator": "<",       "thresholdValue": "300",  "representation": "success", "text": "{0}{1}" },
+                        { "operator": "<",       "thresholdValue": "500",  "representation": "warning", "text": "{0}{1}" },
+                        { "operator": "Default", "thresholdValue": null,   "representation": "error",   "text": "{0}{1}" }
+                      ]
+                    }
+                  },
+                  {
+                    "columnMatch": "TotalTime (ms)",
+                    "formatter": 8,
+                    "formatOptions": { "palette": "coldHot", "max": 3000 },
+                    "numberFormat": { "unit": 23, "options": { "style": "decimal", "maximumFractionDigits": 0 } }
+                  },
+                  {
+                    "columnMatch": "BackendTime (ms)",
+                    "formatter": 8,
+                    "formatOptions": { "palette": "yellowOrangeRed", "max": 2000 },
+                    "numberFormat": { "unit": 23, "options": { "style": "decimal", "maximumFractionDigits": 0 } }
+                  },
+                  {
+                    "columnMatch": "CorrelationId",
+                    "formatter": 7,
+                    "formatOptions": {
+                      "linkTarget": "WorkbookTemplate",
+                      "linkIsContextBlade": true,
+                      "workbookContext": {
+                        "componentIdSource": "workbook",
+                        "resourceIdsSource": "workbook",
+                        "templateIdSource": "static",
+                        "templateId": "Community-Workbooks/AppGW \u2192 APIM \u2192 Foundry End-to-End Trace",
+                        "typeSource": "workbook",
+                        "gallerySource": "workbook",
+                        "locationSource": "default",
+                        "parametersSource": "static",
+                        "parameters": {
+                          "CorrelationId": "{CorrelationId}"
+                        }
+                      },
+                      "linkLabel": "\ud83d\udd0d Trace"
+                    }
+                  }
+                ]
+              }
+            },
+            "name": "query-chain-detail"
+          }
+
+        ]
+      },
+      "conditionalVisibility": {
+        "parameterName": "tab",
+        "comparison": "isEqualTo",
+        "value": "detail"
+      },
+      "name": "group-detail"
     }
+
   ],
   "defaultResourceIds": [
     "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"

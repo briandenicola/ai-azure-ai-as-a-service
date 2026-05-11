@@ -6,7 +6,7 @@ Two workbooks are deployed by `azd provision` into `rg-contoso-ai-platform-dev`.
 |---|---|---|
 | **Primary audience** | Platform ops / SRE | LOB teams, developers, product owners |
 | **Primary question** | Is the circuit breaker tripping? Which Foundry region is serving traffic? | Which LOB is calling what, how long did each layer take, am I hitting quota? |
-| **Data source** | `ApiManagementGatewayLogs`, `AGWAccessLogs` | `AppRequests`, `AppDependencies`, `AGWFirewallLogs`, `AGWAccessLogs` |
+| **Data source** | `ApiManagementGatewayLogs`, `AGWAccessLogs` | `AppRequests`, `AppDependencies` (exact join), `AGWAccessLogs` (separate table), `AGWFirewallLogs` |
 | **Ingestion delay** | ~30 seconds — unsampled | 2–5 minutes — subject to App Insights sampling |
 | **Granularity** | Aggregate trends; per-switch-event rows | Per-request rows; per-layer waterfall |
 | **Use for incidents** | Yes — start here (fastest data) | Post-incident root-cause analysis |
@@ -191,7 +191,9 @@ One row per request. All columns needed to trace a specific failure or latency s
 - A WAF rule is blocking or matching — you need to know which rule and which URI
 - You want to understand the full traffic flow: LOB subscription → APIM product → Foundry backend
 
-**Data source:** `AppRequests` and `AppDependencies` (App Insights, ingested via workspace-based LAW) joined to `AGWAccessLogs` and `AGWFirewallLogs`. Requires App Insights to be correctly wired to APIM (the `applicationInsights` diagnostics block in `apim-gateway.bicep`).
+**Data source:** `AppRequests` and `AppDependencies` (App Insights, ingested via workspace-based LAW) plus `AGWAccessLogs` and `AGWFirewallLogs`. Requires App Insights to be correctly wired to APIM (the `applicationInsights` diagnostics block in `apim-gateway.bicep`).
+
+> **Note on join accuracy:** AGWAccessLogs has no per-request UUID. Joining it to APIM rows via approximate client IP + 2-second time bucket is unreliable under concurrent load (e.g. a 429 from AGW can appear alongside an APIM 200 for a different request). The E2E Trace workbook therefore keeps these two sources in **separate tables** — an exact APIM + Foundry join (via `Request-X-Correlation-Id`), and a standalone AGW access log.
 
 **Limitation:** App Insights has a 2–5 minute ingestion delay and is subject to sampling under high load. Do not use this workbook for real-time incident response — use the Backend Routing Report instead. Use this workbook for post-incident root-cause analysis.
 
@@ -294,28 +296,50 @@ Each bar is divided into three stacked segments:
 
 ---
 
-### Panel 6 — Per-Request Trace Table (table)
+### Panel 6 — APIM + Foundry Per-Request Trace (table)
 
 **Visualization:** Table, up to 1 000 rows  
-**Data source:** `AppRequests` joined to `AppDependencies` and `AGWAccessLogs`
+**Data source:** `AppRequests` joined to `AppDependencies` via `OperationId` (exact match via `Request-X-Correlation-Id`)
 
-Full 3-layer join per request. Click any row to populate the **Correlation ID** filter and see that request's waterfall in the drilldown panel.
+Exact per-request join between APIM and Foundry. Every row corresponds to exactly one real request — there is no cross-request contamination. Click any row to populate the **Correlation ID** filter and see that request's waterfall in the drilldown panel.
 
 | Column | Description |
 |---|---|
 | `Time` | APIM request start time |
 | `Corr ID` | `X-Correlation-Id` — click row to filter waterfall |
 | `URL` | Full request URL |
-| `AGW HTTP` | App Gateway HTTP status (✅ 2xx / ⚠️ 4xx / ❌ 5xx) |
-| `AGW (ms)` | App Gateway overhead — blue heat bar, max 30 000 ms |
-| `APIM HTTP` | APIM status — icon |
+| `APIM HTTP` | APIM HTTP status (✅ 2xx / ⚠️ 4xx / ❌ 5xx) |
 | `APIM (ms)` | APIM total duration — orange heat bar, max 30 000 ms |
 | `Foundry Backend` | ✅ primary or ⚠️ secondary-failover |
 | `Foundry HTTP` | Status Foundry returned — icon |
 | `Foundry (ms)` | Foundry inference time — green heat bar, max 30 000 ms |
 | `Product` | APIM product tier |
 | `Subscription` | LOB subscription name |
-| `Client IP` | Source IP from App Gateway |
+
+> AGW data is intentionally not joined here — see the **App Gateway access log** table below.
+
+---
+
+### Panel 6b — App Gateway Access Log (table)
+
+**Visualization:** Table, latest 500 rows  
+**Data source:** `AGWAccessLogs`
+
+Standalone AGW log — every request the gateway received, including those **shed before reaching APIM** (WAF blocks, rate-limit drops). Because AGW has no per-request UUID this data is shown separately rather than joined to the APIM rows above.
+
+**How to use it alongside Panel 6:**  
+A request showing a 429 or 403 in this table with no corresponding `Corr ID` in the APIM table = the gateway rejected it before forwarding. A request that appears in both tables (same time window, same client IP) = successful end-to-end flow.
+
+| Column | Description |
+|---|---|
+| `Time` | AGW log timestamp |
+| `AGW HTTP` | HTTP status returned by AGW (✅ 2xx / ⚠️ 4xx / ❌ 5xx) |
+| `AGW (ms)` | Time taken at the AGW layer — blue heat bar, max 30 000 ms |
+| `Client IP` | Source IP of the caller |
+| `URL` | Full request URI |
+| `Method` | HTTP method |
+| `Rule Hit` | WAF or routing rule that matched |
+| `WAF Mode` | Detection or Prevention
 
 ---
 

@@ -212,7 +212,7 @@ python examples/python/6-foundry-agent-via-apim.py
 ### 2. Run Mock Test
 
 ```bash
-python tests/test-sdk-endpoint-routing.py
+python load_tests/test-sdk-endpoint-routing.py
 ```
 
 This test patches HTTP libraries to capture all outgoing requests.
@@ -326,7 +326,7 @@ publicNetworkAccess: 'Disabled'
 
 ## Files Created for You
 
-1. **tests/test-sdk-endpoint-routing.py** - HTTP capture test
+1. **load_tests/test-sdk-endpoint-routing.py** - HTTP capture test
 2. **docs/reference/sdk-endpoint-verification.md** - Complete risk analysis
 3. **docs/reference/sdk-source-code-investigation.md** - Source code review guide
 4. **This file** - Direct answers to your questions

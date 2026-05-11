@@ -16,7 +16,7 @@ $ErrorActionPreference = 'Stop'
 $tests = @(
     [pscustomobject]@{
         Number      = 1
-        Script      = 'run-apim-smoke-test.ps1'
+        Script      = 'run_azure_load_test_apim-smoke-test.ps1'
         TestId      = 'apim-smoke-test'
         Duration    = '~2 min'
         Recommended = $true
@@ -29,7 +29,7 @@ $tests = @(
     }
     [pscustomobject]@{
         Number      = 2
-        Script      = 'run-appgw-smoke-test.ps1'
+        Script      = 'run_azure_load_test_appgw-smoke-test.ps1'
         TestId      = 'appgw-smoke-test'
         Duration    = '~5 min'
         Recommended = $false
@@ -42,7 +42,7 @@ $tests = @(
     }
     [pscustomobject]@{
         Number      = 3
-        Script      = 'run-appgw-failover-test.ps1'
+        Script      = 'run_azure_load_test_appgw-failover-test.ps1'
         TestId      = 'appgw-failover-test'
         Duration    = '~2 min'
         Recommended = $false
@@ -55,7 +55,7 @@ $tests = @(
     }
     [pscustomobject]@{
         Number      = 4
-        Script      = 'run-multi-sub-failover-test.ps1'
+        Script      = 'run_azure_load_test_multi-sub-failover-test.ps1'
         TestId      = 'multi-sub-failover-test'
         Duration    = '~2 min'
         Recommended = $false
@@ -68,7 +68,7 @@ $tests = @(
     }
     [pscustomobject]@{
         Number      = 5
-        Script      = 'run-steady-state-test.ps1'
+        Script      = 'run_azure_load_test_steady-state-test.ps1'
         TestId      = 'steady-state-test'
         Duration    = '1 hour'
         Recommended = $false
@@ -115,7 +115,7 @@ $selected = $tests | Where-Object { $_.Number -eq $choice }
 
 Write-Host ""
 Write-Host "  Running: $($selected.Description)" -ForegroundColor Cyan
-Write-Host "  Script : scripts/$($selected.Script)" -ForegroundColor DarkGray
+Write-Host "  Script : load_tests/scripts/azure_load_test/$($selected.Script)" -ForegroundColor DarkGray
 Write-Host ""
 
 # ── Delegate ─────────────────────────────────────────────────────────────────────

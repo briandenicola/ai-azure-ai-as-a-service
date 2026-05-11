@@ -220,7 +220,7 @@ bypass APIM.
 **📖 Read this FIRST:** [sdk-endpoint-verification.md](../docs/reference/sdk-endpoint-verification.md)
 
 **Before deploying to production:**
-1. Run traffic capture test: `tests/test-sdk-endpoint-routing.py`
+1. Run traffic capture test: `load_tests/test-sdk-endpoint-routing.py`
 2. Use `mitmproxy` to verify ALL requests go through APIM
 3. Enable network-level enforcement: `publicNetworkAccess: Disabled`
 

@@ -145,7 +145,26 @@ resource wafPolicy 'Microsoft.Network/ApplicationGatewayWebApplicationFirewallPo
           ruleSetVersion: '1.0'
         }
       ]
-      exclusions: []
+      exclusions: [
+        // Exclude the Authorization header from all OWASP managed rules.
+        // Entra Bearer JWTs contain base64url-encoded JSON that triggers OWASP
+        // CRS rules (e.g. 942100 SQL injection, 941xxx XSS) due to characters
+        // like dots, plus signs, and encoded payloads in the JWT signature.
+        // The JWT itself is validated by APIM's validate-jwt policy — WAF does
+        // not need to inspect it.
+        {
+          matchVariable: 'RequestHeaderNames'
+          selectorMatchOperator: 'Equals'
+          selector: 'Authorization'
+          exclusionManagedRuleSets: [
+            {
+              ruleSetType: 'OWASP'
+              ruleSetVersion: '3.2'
+              ruleGroups: []   // empty = exclude all rule groups for this header
+            }
+          ]
+        }
+      ]
     }
   }
 }
