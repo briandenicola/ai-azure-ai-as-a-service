@@ -1,0 +1,24 @@
+// E2E Trace — Panel 12: Semantic Cache Hit Rate (table)
+// Data source:  AppRequests (requires X-Cache response header captured in APIM diagnostics)
+// Parameters:   {TimeRange}        — workbook time-range picker
+//               {SubscriptionName} — LOB subscription filter (value:all = no filter)
+//
+// Prerequisite: X-Cache header must be captured in the APIM diagnostics frontend.response.headers
+// block in apim-gateway.bicep.  Run azd provision once to start populating data.
+// Cache policy sets X-Cache: HIT on cache-served responses, MISS on backend calls.
+// One row per subscription.
+
+AppRequests
+| where TimeGenerated {TimeRange}
+| extend sub       = tostring(Properties["Subscription Name"])
+| extend cacheStatus = tostring(Properties["Response-Header-X-Cache"])
+| where isnotempty(sub) and isnotempty(cacheStatus)
+| where "{SubscriptionName}" == "value:all" or sub == "{SubscriptionName}"
+| summarize
+    Hits   = countif(cacheStatus == "HIT"),
+    Misses = countif(cacheStatus == "MISS"),
+    Total  = count()
+  by Subscription = sub
+| extend ['Hit Rate %'] = round(100.0 * Hits / Total, 1)
+| project Subscription, Total, ['Cache Hits'] = Hits, ['Cache Misses'] = Misses, ['Hit Rate %']
+| sort by Subscription asc

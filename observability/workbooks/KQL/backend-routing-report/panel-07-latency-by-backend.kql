@@ -1,0 +1,18 @@
+// Backend Routing Report — Panel 7: APIM Latency by Backend P50/P90 (line chart)
+// Data source:  ApiManagementGatewayLogs grouped by backend region
+// Parameters:   {TimeRange} — workbook time-range picker
+//               {Granularity} — chart granularity picker (1m / 5m / 15m / 30m / 1h)
+//
+// Splits latency by Primary vs Secondary backend.
+// Secondary overhead during failover is typically +300–500 ms due to West US round-trip.
+
+ApiManagementGatewayLogs
+| where TimeGenerated {TimeRange}
+| where isnotempty(BackendUrl)
+| extend BackendRegion = iff(BackendUrl has "primary", "Primary (East US)", iff(BackendUrl has "secondary", "Secondary (West US)", "Other"))
+| summarize
+    ['P50 Total (ms)']   = percentile(TotalTime,   50),
+    ['P90 Total (ms)']   = percentile(TotalTime,   90),
+    ['P50 Backend (ms)'] = percentile(BackendTime, 50),
+    ['P90 Backend (ms)'] = percentile(BackendTime, 90)
+  by bin(TimeGenerated, {Granularity}), BackendRegion

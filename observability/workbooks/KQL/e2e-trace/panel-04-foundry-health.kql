@@ -1,0 +1,35 @@
+// E2E Trace — Panel 4: Foundry Backend Health (table)
+// Data source:  AppRequests (backend region from Response-X-Backend-Region-Used)
+// Parameters:   {TimeRange} — workbook time-range picker
+//
+// One row per Foundry backend — latency percentiles + error rate across all LOB subscriptions.
+// Uses Response-X-Backend-Region-Used so both primary and secondary-failover rows are visible.
+// AppDependencies only captures the final call; primary 429s are swallowed by APIM retry.
+
+AppRequests
+| where TimeGenerated {TimeRange}
+| extend backendRaw = tostring(Properties["Response-X-Backend-Region-Used"])
+| where isnotempty(backendRaw)
+| extend backend = case(
+    backendRaw == "primary",            "Primary Foundry (East US)",
+    backendRaw == "secondary-failover", "Secondary Foundry (West US)",
+    backendRaw)
+| summarize
+    Requests     = count(),
+    Errors       = countif(Success == false),
+    ['Avg (ms)'] = round(avg(DurationMs), 0),
+    ['p50 (ms)'] = round(percentile(DurationMs, 50), 0),
+    ['p95 (ms)'] = round(percentile(DurationMs, 95), 0),
+    ['p99 (ms)'] = round(percentile(DurationMs, 99), 0)
+    by backend
+| extend ['Error %'] = round(100.0 * Errors / Requests, 1)
+| sort by Requests desc
+| project
+    ['Foundry Backend'] = backend,
+    Requests,
+    Errors,
+    ['Error %'],
+    ['Avg (ms)'],
+    ['p50 (ms)'],
+    ['p95 (ms)'],
+    ['p99 (ms)']

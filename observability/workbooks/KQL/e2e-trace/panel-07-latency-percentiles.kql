@@ -1,0 +1,38 @@
+// E2E Trace — Panel 7: Latency Percentiles by Layer (table)
+// Data source:  AppRequests joined to AppDependencies
+// Parameters:   {TimeRange} — workbook time-range picker
+//
+// P50 / P95 / P99 for: APIM overhead, Foundry inference, Total APIM.
+// Large gap between p50 and p99 on Foundry inference = model occasionally slow
+// (prompt length variance, cold start, or throttling).
+// Large p99 on APIM overhead = policy occasionally stalling
+// (e.g. synchronous cache lookup on miss).
+
+let apimReqs = AppRequests
+| where TimeGenerated {TimeRange}
+| extend corrId = tostring(Properties["Request-X-Correlation-Id"])
+| where isnotempty(corrId)
+| project corrId, apimDurationMs = DurationMs, opId = OperationId;
+let foundryDeps = AppDependencies
+| where TimeGenerated {TimeRange}
+| extend corrId = tostring(Properties["Request-X-Correlation-Id"])
+| where isnotempty(corrId)
+| summarize foundryMs = avg(DurationMs) by corrId;
+apimReqs
+| join kind=leftouter foundryDeps on corrId
+| extend foundryMs        = iff(isnotempty(foundryMs), foundryMs, 0.0)
+| extend apimOverheadMs   = max_of(apimDurationMs - foundryMs, 0.0)
+| summarize
+    ['APIM overhead p50']    = round(percentile(apimOverheadMs,  50), 1),
+    ['APIM overhead p95']    = round(percentile(apimOverheadMs,  95), 1),
+    ['APIM overhead p99']    = round(percentile(apimOverheadMs,  99), 1),
+    ['Foundry inference p50']= round(percentile(foundryMs,       50), 1),
+    ['Foundry inference p95']= round(percentile(foundryMs,       95), 1),
+    ['Foundry inference p99']= round(percentile(foundryMs,       99), 1),
+    ['Total APIM p50']       = round(percentile(apimDurationMs,  50), 1),
+    ['Total APIM p95']       = round(percentile(apimDurationMs,  95), 1),
+    ['Total APIM p99']       = round(percentile(apimDurationMs,  99), 1)
+| project Stat = "Latency (ms)",
+    ['APIM overhead p50'], ['APIM overhead p95'], ['APIM overhead p99'],
+    ['Foundry inference p50'], ['Foundry inference p95'], ['Foundry inference p99'],
+    ['Total APIM p50'], ['Total APIM p95'], ['Total APIM p99']

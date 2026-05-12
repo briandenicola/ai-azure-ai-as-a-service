@@ -1,0 +1,10 @@
+// Backend Routing Report — Panel 1: Traffic Summary (KPI tiles)
+// Data source:  ApiManagementGatewayLogs
+// Parameters:   {TimeRange} — workbook time-range picker
+
+union
+  (ApiManagementGatewayLogs | where TimeGenerated {TimeRange} | summarize Value=count() | extend Metric="Total Requests", Sub="through APIM"),
+  (ApiManagementGatewayLogs | where TimeGenerated {TimeRange} | where BackendUrl has "primary" | summarize Value=count() | extend Metric="Primary Backend", Sub="Foundry East US"),
+  (ApiManagementGatewayLogs | where TimeGenerated {TimeRange} | where BackendUrl has "secondary" | summarize Value=count() | extend Metric="Secondary Backend", Sub="Foundry West US (failover)"),
+  (ApiManagementGatewayLogs | where TimeGenerated {TimeRange} | where isnotempty(BackendUrl) and (ResponseCode >= 400 or BackendResponseCode >= 400) | summarize Value=count() | extend Metric="Backend Errors", Sub="4xx / 5xx")
+| project Metric, Value, Sub

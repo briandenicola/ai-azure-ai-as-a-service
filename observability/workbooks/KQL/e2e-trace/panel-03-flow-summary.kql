@@ -1,0 +1,38 @@
+// E2E Trace — Panel 3: Subscription → Product → Foundry Routing Summary (table)
+// Data source:  AppRequests (backend region from Response-X-Backend-Region-Used response header)
+// Parameters:   {TimeRange}        — workbook time-range picker
+//               {SubscriptionName} — LOB subscription filter (value:all = no filter)
+//
+// Aggregate flow: one row per (LOB subscription, APIM product tier, Foundry backend).
+// "⚠ APIM rejected (no backend reached)" = APIM blocked before forwarding
+// (quota exceeded, invalid key, policy rejection, or APIM internal error).
+// More reliable than AppDependencies: APIM retry swallows the primary 429 so the
+// primary backend call never appears as a dependency row.
+
+AppRequests
+| where TimeGenerated {TimeRange}
+| extend sub       = tostring(Properties["Subscription Name"])
+| extend prod      = tostring(Properties["Product Name"])
+| extend backendRaw = tostring(Properties["Response-X-Backend-Region-Used"])
+| where "{SubscriptionName}" == "value:all" or sub == "{SubscriptionName}"
+| extend backend = case(
+    backendRaw == "primary",            "Primary Foundry (East US)",
+    backendRaw == "secondary-failover", "Secondary Foundry (West US)",
+    isempty(backendRaw),                "(no backend call)",
+    backendRaw == "unknown",            "⚠ APIM rejected (no backend reached)",
+    backendRaw)
+| summarize
+    Requests          = count(),
+    Errors            = countif(Success == false),
+    ['Avg APIM (ms)'] = round(avg(DurationMs), 0)
+    by sub, prod, backend
+| extend ['Error %'] = round(100.0 * Errors / Requests, 1)
+| sort by Requests desc
+| project
+    ['Subscription'] = sub,
+    ['Product']      = prod,
+    ['→ Foundry']    = backend,
+    Requests,
+    Errors,
+    ['Error %'],
+    ['Avg APIM (ms)']

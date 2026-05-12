@@ -1,0 +1,62 @@
+// E2E Trace — Panel 10: Per-Request Latency Waterfall (horizontal stacked bar, up to 50 rows)
+// Data source:  AppRequests joined to AppDependencies and AGWAccessLogs
+// Parameters:   {TimeRange}        — workbook time-range picker
+//               {SubscriptionName} — LOB subscription filter (value:all = no filter)
+//               {CorrelationId}    — when set, shows single request; empty = 50 most recent
+//
+// Each horizontal bar = one request, divided into three segments:
+//   App Gateway (ms)       — WAF + TLS overhead before reaching APIM
+//   APIM overhead (ms)     — policy execution (auth, quota, logging, header injection)
+//   Foundry inference (ms) — AI model generation time
+//
+// Row label: HH:mm:ss [subscription] [product] [→ backend] [total ms]
+// Driven by Correlation ID filter — click a row in Panel 9 to populate it.
+
+let filter_corrId = "{CorrelationId}";
+let apim = AppRequests
+| where TimeGenerated {TimeRange}
+| extend corrId       = tostring(Properties["Request-X-Correlation-Id"])
+| extend apimProduct  = tostring(Properties["Product Name"])
+| extend apimSub      = tostring(Properties["Subscription Name"])
+| where isnotempty(corrId)
+| where filter_corrId == "" or corrId == filter_corrId
+| where "{SubscriptionName}" == "value:all" or apimSub == "{SubscriptionName}"
+| project apimTime=TimeGenerated, corrId, OperationId,
+          apimDurationMs=DurationMs, apimStatus=ResultCode, apimProduct, apimSub;
+let foundry = AppDependencies
+| where TimeGenerated {TimeRange}
+| extend corrId = tostring(Properties["Request-X-Correlation-Id"])
+| where isnotempty(corrId)
+| where filter_corrId == "" or corrId == filter_corrId
+| project OperationId, foundryDurationMs=DurationMs,
+          foundryTarget=Target;
+let agw = AGWAccessLogs
+| where TimeGenerated {TimeRange}
+| extend corrId = strcat(ClientIp, "-", tostring(ClientPort))
+| where filter_corrId == "" or corrId == filter_corrId
+| project corrId, agwTotalMs = toreal(TimeTaken) * 1000;
+apim
+| join kind=leftouter (foundry) on OperationId
+| join kind=leftouter (agw) on corrId
+| extend foundryMs      = iff(isnotempty(foundryDurationMs), foundryDurationMs, 0.0)
+| extend agwTotal       = iff(isnotempty(agwTotalMs), agwTotalMs, apimDurationMs)
+| extend apimOverheadMs = max_of(apimDurationMs - foundryMs, 0.0)
+| extend agwOverheadMs  = max_of(agwTotal - apimDurationMs, 0.0)
+| extend foundryHost    = tostring(split(foundryTarget, "/")[2])
+| extend backend        = case(
+    foundryHost contains "primary",   "→ Primary",
+    foundryHost contains "secondary", "→ Secondary",
+    "→ Foundry")
+| extend rowLabel = strcat(
+    format_datetime(apimTime, "HH:mm:ss"),
+    " [", apimSub, "]",
+    " ", apimProduct,
+    " ", backend,
+    " [", tostring(round(agwTotal,0)), "ms]")
+| project
+    rowLabel,
+    ['App Gateway (ms)'] = round(agwOverheadMs, 1),
+    ['APIM overhead (ms)'] = round(apimOverheadMs, 1),
+    ['Foundry inference (ms)'] = round(foundryMs, 1)
+| sort by rowLabel asc
+| limit 50

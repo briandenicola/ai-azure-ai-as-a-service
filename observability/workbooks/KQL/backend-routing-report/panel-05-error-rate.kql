@@ -1,0 +1,15 @@
+// Backend Routing Report — Panel 5: Error Rate % by Backend (line chart)
+// Data source:  ApiManagementGatewayLogs
+// Parameters:   {TimeRange} — workbook time-range picker
+//               {Granularity} — chart granularity picker (1m / 5m / 15m / 30m / 1h)
+//
+// Colours: Green = Primary (East US) · Orange = Secondary (West US)
+// Healthy failover pattern: primary error rate spikes to 100%, then secondary stays near 0%.
+
+ApiManagementGatewayLogs
+| where TimeGenerated {TimeRange}
+| where isnotempty(BackendUrl)
+| extend BackendRegion = iff(BackendUrl has "primary", "Primary (East US)", iff(BackendUrl has "secondary", "Secondary (West US)", "Other"))
+| summarize Total=count(), Errors=countif(ResponseCode >= 400 or BackendResponseCode >= 400) by bin(TimeGenerated, {Granularity}), BackendRegion
+| extend ErrorPct = round(100.0 * Errors / Total, 1)
+| project TimeGenerated, BackendRegion, ErrorPct

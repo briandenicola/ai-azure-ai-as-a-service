@@ -1,0 +1,27 @@
+// E2E Trace — Panel 8: WAF Rule Matches / Blocks (table, top 50 rules)
+// Data source:  AGWFirewallLogs
+// Parameters:   {TimeRange} — workbook time-range picker
+//
+// WAF events from App Gateway (OWASP CRS 3.2 + Bot Manager).
+// WAF runs BEFORE APIM — blocked requests here never reach APIM and will not appear
+// in App Insights.
+//
+// False positives: AI API usage (JSON POST bodies with prompt text) can trigger OWASP rules
+// for SQL injection or XSS.  Use Rule ID to determine whether to add an exclusion for
+// the specific URI path (/openai/deployments/*/chat/completions).
+
+AGWFirewallLogs
+| where TimeGenerated {TimeRange}
+| summarize
+    Blocked = countif(Action == "Blocked"),
+    Matched = countif(Action == "Matched"),
+    Total   = count()
+    by RuleSetType, RuleId, Message
+| sort by Blocked desc, Total desc
+| project
+    ['Rule Set']  = RuleSetType,
+    ['Rule ID']   = RuleId,
+    Message,
+    Blocked,
+    Matched,
+    Total

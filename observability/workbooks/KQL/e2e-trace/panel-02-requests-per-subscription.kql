@@ -1,0 +1,15 @@
+// E2E Trace — Panel 2: Requests per Subscription over Time (stacked bar chart)
+// Data source:  AppRequests
+// Parameters:   {TimeRange}        — workbook time-range picker
+//               {SubscriptionName} — LOB subscription filter (value:all = no filter)
+//
+// 5-minute buckets, each colour = one APIM subscription (LOB).
+// One subscription dominating = that LOB is bursting beyond its quota.
+
+AppRequests
+| where TimeGenerated {TimeRange}
+| extend sub = tostring(Properties["Subscription Name"])
+| where isnotempty(sub)
+| where "{SubscriptionName}" == "value:all" or sub == "{SubscriptionName}"
+| summarize Requests = count() by bin(TimeGenerated, 5m), sub
+| sort by TimeGenerated asc

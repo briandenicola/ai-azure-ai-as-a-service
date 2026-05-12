@@ -1,0 +1,28 @@
+// Backend Routing Report — Panel 8: Full Request Chain AppGW → APIM → Foundry (table)
+// Data source:  ApiManagementGatewayLogs
+// Parameters:   {TimeRange} — workbook time-range picker
+//
+// One row per request, latest 500.  Use CorrelationId to cross-reference in the E2E Trace workbook.
+// FailoverOccurred = "Yes" when request reached secondary and received HTTP 200 (clean failover).
+
+ApiManagementGatewayLogs
+| where TimeGenerated {TimeRange}
+| where isnotempty(BackendUrl)
+| extend BackendRegion = iff(BackendUrl has "primary", "Primary (East US)", iff(BackendUrl has "secondary", "Secondary (West US)", "Other"))
+| extend FailoverOccurred = iff(BackendUrl has "secondary" and BackendResponseCode == 200, "Yes", "")
+| project
+    TimeGenerated,
+    BackendRegion,
+    FailoverOccurred,
+    ApimSubscriptionId,
+    ResponseCode,
+    BackendResponseCode,
+    ['TotalTime (ms)']   = TotalTime,
+    ['BackendTime (ms)'] = BackendTime,
+    IsRequestSuccess,
+    LastErrorReason,
+    LastErrorMessage,
+    CallerIpAddress,
+    CorrelationId
+| order by TimeGenerated desc
+| limit 500

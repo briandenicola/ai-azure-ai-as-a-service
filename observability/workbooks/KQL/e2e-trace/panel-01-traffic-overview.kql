@@ -1,0 +1,44 @@
+// E2E Trace — Panel 1: Traffic Overview (KPI tiles)
+// Data source:  AppRequests, AppDependencies
+// Parameters:   {TimeRange}        — workbook time-range picker
+//               {SubscriptionName} — LOB subscription filter (value:all = no filter)
+//
+// Four tiles: Total Requests, Avg APIM Latency, Avg Foundry Latency, Failed Requests.
+// Only requests carrying an X-Correlation-Id header are counted (set by App Gateway).
+// WAF-blocked requests are excluded.
+
+let sub_filter = "{SubscriptionName}";
+let apimRequests = AppRequests
+| where TimeGenerated {TimeRange}
+| extend corrId = tostring(Properties["Request-X-Correlation-Id"])
+| extend sub    = tostring(Properties["Subscription Name"])
+| where isnotempty(corrId)
+| where sub_filter == "value:all" or sub == sub_filter;
+let foundryDeps = AppDependencies
+| where TimeGenerated {TimeRange}
+| extend corrId = tostring(Properties["Request-X-Correlation-Id"])
+| where isnotempty(corrId);
+union
+  (apimRequests
+   | summarize
+       Value = toreal(count()),
+       Sub   = strcat("avg ", round(avg(DurationMs), 0), " ms")
+   | extend Metric = "Total Requests"),
+  (apimRequests
+   | summarize
+       Value = round(avg(DurationMs), 0),
+       Sub   = "milliseconds"
+   | extend Metric = "Avg APIM Latency"),
+  (foundryDeps
+   | join kind=inner (apimRequests | project corrId, OperationId) on $left.OperationId == $right.OperationId
+   | summarize
+       Value = round(avg(DurationMs), 0),
+       Sub   = "milliseconds"
+   | extend Metric = "Avg Foundry Latency"),
+  (apimRequests
+   | where Success == false
+   | summarize
+       Value = toreal(count()),
+       Sub   = "errors"
+   | extend Metric = "Failed Requests")
+| project Metric, Value, Sub

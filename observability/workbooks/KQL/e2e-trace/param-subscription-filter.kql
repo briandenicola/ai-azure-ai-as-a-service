@@ -1,0 +1,14 @@
+// E2E Trace — Parameter: Subscription filter dropdown
+// Data source:  AppRequests
+// Parameters:   {TimeRange} — workbook time-range picker
+//
+// Populates the Subscription filter list from active subscription names in AppRequests.
+// Used to narrow all panels to a single LOB subscription.
+
+AppRequests
+| where TimeGenerated {TimeRange}
+| extend sub = tostring(Properties["Subscription Name"])
+| where isnotempty(sub)
+| summarize by sub
+| sort by sub asc
+| project value = sub

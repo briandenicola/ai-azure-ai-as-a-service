@@ -13,6 +13,8 @@ Two workbooks are deployed by `azd provision` into `rg-contoso-ai-platform-dev`.
 | **Default time range** | Last 1 hour | Last 4 hours |
 | **Filters** | Time Range, Chart Granularity | Time Range, Subscription (LOB filter), Correlation ID |
 
+The KQL for every panel is available as standalone `.kql` files in [`KQL/backend-routing-report/`](KQL/backend-routing-report/) and [`KQL/e2e-trace/`](KQL/e2e-trace/). Use them to run queries directly in Log Analytics, build alerts, or validate behaviour without opening the workbook UI.
+
 After `azd provision`, find your workbooks in the Azure portal:
 **Azure Monitor → Workbooks** — filter by your resource group (`rg-contoso-ai-platform-<env>`). Both workbooks appear with their display names.
 
@@ -42,7 +44,8 @@ After `azd provision`, find your workbooks in the Azure portal:
 ### Panel 1 — Traffic Summary (KPI tiles)
 
 **Visualization:** Tiles  
-**Data source:** `ApiManagementGatewayLogs`
+**Data source:** `ApiManagementGatewayLogs`  
+**KQL:** [panel-01-traffic-summary.kql](KQL/backend-routing-report/panel-01-traffic-summary.kql)
 
 Four at-a-glance counters for the selected time range:
 
@@ -61,7 +64,8 @@ Four at-a-glance counters for the selected time range:
 
 **Visualization:** Stacked area chart  
 **Data source:** `ApiManagementGatewayLogs`  
-**Colours:** Green = Primary (East US) · Orange = Secondary (West US) · Blue = No Backend (APIM-rejected)
+**Colours:** Green = Primary (East US) · Orange = Secondary (West US) · Blue = No Backend (APIM-rejected)  
+**KQL:** [panel-02-routing-timeline.kql](KQL/backend-routing-report/panel-02-routing-timeline.kql)
 
 Shows request volume split by backend per time bucket. A **solid block of orange** with no green underneath means the circuit breaker was fully open — all traffic was failing over to secondary.
 
@@ -76,7 +80,8 @@ Shows request volume split by backend per time bucket. A **solid block of orange
 ### Panel 3 — Backend Switch Events (table)
 
 **Visualization:** Table (sortable, filterable)  
-**Data source:** `ApiManagementGatewayLogs`
+**Data source:** `ApiManagementGatewayLogs`  
+**KQL:** [panel-03-switch-events.kql](KQL/backend-routing-report/panel-03-switch-events.kql)
 
 Each row is one point where APIM switched from one backend to a different one (compared to the previous request). Rows are ordered most-recent first.
 
@@ -111,7 +116,8 @@ Each row is one point where APIM switched from one backend to a different one (c
 
 **Visualization:** Bar chart (per-minute buckets)  
 **Data source:** `ApiManagementGatewayLogs` filtered to `BackendUrl has "primary"` and errors only  
-**Colours:** Orange = failure count · Red = circuit breaker threshold (5)
+**Colours:** Orange = failure count · Red = circuit breaker threshold (5)  
+**KQL:** [panel-04-primary-failures.kql](KQL/backend-routing-report/panel-04-primary-failures.kql)
 
 Shows how many 429 + 5xx responses per minute came back from the Primary Foundry endpoint. The red line at **y = 5** is the circuit breaker threshold from `circuit-breaker-multi-region.xml` — when orange bars exceed red, the breaker trips.
 
@@ -123,7 +129,8 @@ Shows how many 429 + 5xx responses per minute came back from the Primary Foundry
 
 **Visualization:** Line chart  
 **Data source:** `ApiManagementGatewayLogs`  
-**Colours:** Green = Primary (East US) · Orange = Secondary (West US)
+**Colours:** Green = Primary (East US) · Orange = Secondary (West US)  
+**KQL:** [panel-05-error-rate.kql](KQL/backend-routing-report/panel-05-error-rate.kql)
 
 Error percentage per time bucket, split by backend. Shows whether secondary is clean after a failover (orange line stays near 0%) or whether it is also overwhelmed (orange line rises too).
 
@@ -135,7 +142,8 @@ A healthy failover pattern: primary error rate spikes → green line rises to 10
 
 **Visualization:** Line chart (side by side with Panel 7)  
 **Data source:** `ApiManagementGatewayLogs` joined to `AGWAccessLogs`  
-**Colours:** Purple = AppGW · Blue = APIM Total · Green = Backend (Foundry only)
+**Colours:** Purple = AppGW · Blue = APIM Total · Green = Backend (Foundry only)  
+**KQL:** [panel-06-chain-latency.kql](KQL/backend-routing-report/panel-06-chain-latency.kql)
 
 Six series: P50 and P90 for each of the three layers. Shows end-to-end wall-clock latency as the client experiences it.
 
@@ -149,7 +157,8 @@ Six series: P50 and P90 for each of the three layers. Shows end-to-end wall-cloc
 ### Panel 7 — APIM Latency by Backend — P50 / P90 (line chart)
 
 **Visualization:** Line chart (side by side with Panel 6)  
-**Data source:** `ApiManagementGatewayLogs` grouped by backend region
+**Data source:** `ApiManagementGatewayLogs` grouped by backend region  
+**KQL:** [panel-07-latency-by-backend.kql](KQL/backend-routing-report/panel-07-latency-by-backend.kql)
 
 P50 and P90 total + backend latency, split by Primary vs Secondary. Useful for measuring the cross-region overhead of Secondary (West US) relative to Primary (East US). Typical secondary overhead during failover: +300–500 ms extra due to the additional round-trip to West US.
 
@@ -158,7 +167,8 @@ P50 and P90 total + backend latency, split by Primary vs Secondary. Useful for m
 ### Panel 8 — Full Request Chain — AppGW → APIM → Foundry (table)
 
 **Visualization:** Table (sortable, filterable), latest 500 requests  
-**Data source:** `ApiManagementGatewayLogs`
+**Data source:** `ApiManagementGatewayLogs`  
+**KQL:** [panel-08-request-chain.kql](KQL/backend-routing-report/panel-08-request-chain.kql)
 
 One row per request. All columns needed to trace a specific failure or latency spike.
 
@@ -210,7 +220,8 @@ One row per request. All columns needed to trace a specific failure or latency s
 ### Panel 1 — Traffic Overview (KPI tiles)
 
 **Visualization:** Tiles  
-**Data source:** `AppRequests`, `AppDependencies`
+**Data source:** `AppRequests`, `AppDependencies`  
+**KQL:** [panel-01-traffic-overview.kql](KQL/e2e-trace/panel-01-traffic-overview.kql)
 
 Four tiles scoped by the Subscription filter:
 
@@ -228,7 +239,8 @@ Only requests carrying an `X-Correlation-Id` header are counted (App Gateway set
 ### Panel 2 — Requests per Subscription over Time (stacked bar chart)
 
 **Visualization:** Stacked bar chart, 5-minute buckets  
-**Data source:** `AppRequests`
+**Data source:** `AppRequests`  
+**KQL:** [panel-02-requests-per-subscription.kql](KQL/e2e-trace/panel-02-requests-per-subscription.kql)
 
 Request volume over time, each colour = one APIM subscription (LOB). Tall bars with many colours = sustained concurrent load from multiple LOBs — the scenario that saturates primary Foundry TPM quota.
 
@@ -241,7 +253,8 @@ Request volume over time, each colour = one APIM subscription (LOB). Tall bars w
 ### Panel 3 — Subscription → Product → Foundry Routing Summary (table)
 
 **Visualization:** Table  
-**Data source:** `AppRequests` (backend region from `Response-X-Backend-Region-Used` response header)
+**Data source:** `AppRequests` (backend region from `Response-X-Backend-Region-Used` response header)  
+**KQL:** [panel-03-flow-summary.kql](KQL/e2e-trace/panel-03-flow-summary.kql)
 
 Aggregate flow table: one row per unique combination of (LOB subscription, APIM product tier, Foundry backend).
 
@@ -262,7 +275,8 @@ Aggregate flow table: one row per unique combination of (LOB subscription, APIM 
 ### Panel 4 — Foundry Backend Health (table)
 
 **Visualization:** Table  
-**Data source:** `AppRequests` (backend region from `Response-X-Backend-Region-Used`)
+**Data source:** `AppRequests` (backend region from `Response-X-Backend-Region-Used`)  
+**KQL:** [panel-04-foundry-health.kql](KQL/e2e-trace/panel-04-foundry-health.kql)
 
 One row per Foundry backend — latency percentiles and error rate aggregated across all LOB subscriptions.
 
@@ -282,7 +296,8 @@ One row per Foundry backend — latency percentiles and error rate aggregated ac
 ### Panel 5 — Avg Latency per Layer (stacked bar chart)
 
 **Visualization:** Stacked bar chart, 5-minute buckets  
-**Data source:** `AppRequests` joined to `AppDependencies`
+**Data source:** `AppRequests` joined to `AppDependencies`  
+**KQL:** [panel-05-avg-latency-per-layer.kql](KQL/e2e-trace/panel-05-avg-latency-per-layer.kql)
 
 Each bar is divided into three stacked segments:
 
@@ -299,7 +314,8 @@ Each bar is divided into three stacked segments:
 ### Panel 6 — APIM + Foundry Per-Request Trace (table)
 
 **Visualization:** Table, up to 1 000 rows  
-**Data source:** `AppRequests` joined to `AppDependencies` via `OperationId` (exact match via `Request-X-Correlation-Id`)
+**Data source:** `AppRequests` joined to `AppDependencies` via `OperationId` (exact match via `Request-X-Correlation-Id`)  
+**KQL:** [panel-06-apim-foundry-trace.kql](KQL/e2e-trace/panel-06-apim-foundry-trace.kql)
 
 Exact per-request join between APIM and Foundry. Every row corresponds to exactly one real request — there is no cross-request contamination. Click any row to populate the **Correlation ID** filter and see that request's waterfall in the drilldown panel.
 
@@ -323,7 +339,8 @@ Exact per-request join between APIM and Foundry. Every row corresponds to exactl
 ### Panel 6b — App Gateway Access Log (table)
 
 **Visualization:** Table, latest 500 rows  
-**Data source:** `AGWAccessLogs`
+**Data source:** `AGWAccessLogs`  
+**KQL:** [panel-06b-agw-access-log.kql](KQL/e2e-trace/panel-06b-agw-access-log.kql)
 
 Standalone AGW log — every request the gateway received, including those **shed before reaching APIM** (WAF blocks, rate-limit drops). Because AGW has no per-request UUID this data is shown separately rather than joined to the APIM rows above.
 
@@ -346,7 +363,8 @@ A request showing a 429 or 403 in this table with no corresponding `Corr ID` in 
 ### Panel 7 — Latency Percentiles by Layer (table)
 
 **Visualization:** Table  
-**Data source:** `AppRequests` joined to `AppDependencies`
+**Data source:** `AppRequests` joined to `AppDependencies`  
+**KQL:** [panel-07-latency-percentiles.kql](KQL/e2e-trace/panel-07-latency-percentiles.kql)
 
 P50 / P95 / P99 for three metrics, shown side by side:
 
@@ -363,7 +381,8 @@ P50 / P95 / P99 for three metrics, shown side by side:
 ### Panel 8 — WAF Rule Matches / Blocks (table)
 
 **Visualization:** Table, top 50 rules  
-**Data source:** `AGWFirewallLogs`
+**Data source:** `AGWFirewallLogs`  
+**KQL:** [panel-08-waf-rules.kql](KQL/e2e-trace/panel-08-waf-rules.kql)
 
 WAF events from Application Gateway (OWASP CRS 3.2 + Bot Manager). The WAF runs **before** APIM — blocked requests here never reach APIM and will not appear in App Insights.
 
@@ -384,7 +403,8 @@ WAF events from Application Gateway (OWASP CRS 3.2 + Bot Manager). The WAF runs 
 
 **Visualization:** Table, up to 1 000 rows  
 **Data source:** `AppRequests` joined to `AppDependencies` and `AGWAccessLogs`  
-**Click any row to populate the Correlation ID and drive the waterfall below.**
+**Click any row to populate the Correlation ID and drive the waterfall below.**  
+**KQL:** [panel-09-request-routing.kql](KQL/e2e-trace/panel-09-request-routing.kql)
 
 | Column | Description |
 |---|---|
@@ -407,7 +427,8 @@ WAF events from Application Gateway (OWASP CRS 3.2 + Bot Manager). The WAF runs 
 ### Panel 10 — Per-Request Latency Waterfall (horizontal bar chart)
 
 **Visualization:** Horizontal stacked bar chart, up to 50 requests  
-**Data source:** `AppRequests` joined to `AppDependencies` and `AGWAccessLogs`
+**Data source:** `AppRequests` joined to `AppDependencies` and `AGWAccessLogs`  
+**KQL:** [panel-10-waterfall-drilldown.kql](KQL/e2e-trace/panel-10-waterfall-drilldown.kql)
 
 Driven by the **Correlation ID** filter. When a Correlation ID is set (by clicking a row in Panel 9, or pasting one), this chart shows the single matching request. When no Correlation ID is set, shows the 50 most recent requests.
 
@@ -428,7 +449,8 @@ Use this chart to compare multiple requests at the same timestamp and immediatel
 ### Panel 11 — Per-Model Usage Breakdown (table)
 
 **Visualization:** Table  
-**Data source:** `AppRequests` (model extracted from the deployment URL path)
+**Data source:** `AppRequests` (model extracted from the deployment URL path)  
+**KQL:** [panel-11-model-usage.kql](KQL/e2e-trace/panel-11-model-usage.kql)
 
 One row per (model, subscription) combination. No policy changes required — the model name is always present in `AppRequests.Url` as `/openai/deployments/<model>/chat/completions`.
 
@@ -445,7 +467,8 @@ One row per (model, subscription) combination. No policy changes required — th
 ### Panel 12 — Semantic Cache Hit Rate (table)
 
 **Visualization:** Table  
-**Data source:** `AppRequests` (requires `X-Cache` response header captured in APIM diagnostics)
+**Data source:** `AppRequests` (requires `X-Cache` response header captured in APIM diagnostics)  
+**KQL:** [panel-12-cache-hit-rate.kql](KQL/e2e-trace/panel-12-cache-hit-rate.kql)
 
 > **Prerequisite:** The `X-Cache` header must be captured in the APIM diagnostics `frontend.response.headers` block in `apim-gateway.bicep`. Run `azd provision` once after that change to start populating data.
 
@@ -464,7 +487,8 @@ One row per subscription showing how often the semantic cache served a response 
 ### Panel 13 — Token Quota Utilization (table)
 
 **Visualization:** Table  
-**Data source:** `AppRequests` joined to `AppDependencies` (token counts from `Response-Header-X-Tokens-Used`)
+**Data source:** `AppRequests` joined to `AppDependencies` (token counts from `Response-Header-X-Tokens-Used`)  
+**KQL:** [panel-13-token-quota.kql](KQL/e2e-trace/panel-13-token-quota.kql)
 
 > **Prerequisite:** The `X-Tokens-Used` header must be captured in APIM diagnostics, and the `azure-openai-emit-token-metric` policy must be active. Run `azd provision` once after enabling to start populating data.
 

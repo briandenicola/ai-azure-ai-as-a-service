@@ -1,0 +1,37 @@
+// E2E Trace — Panel 5: Avg Latency per Layer (stacked bar chart, 5-min buckets)
+// Data source:  AppRequests joined to AppDependencies
+// Parameters:   {TimeRange} — workbook time-range picker
+//
+// Three stacked segments per bar:
+//   App GW overhead  (blue)   — WAF + TLS; currently 0 (join is approximate; see per-request table)
+//   APIM overhead    (orange) — policy execution: auth, quota, cache lookup, logging (<50 ms healthy)
+//   Foundry inference(green)  — AI model generation time (dominates for large prompts / slow models)
+//
+// Orange segment growing → APIM policy adding latency (check semantic cache miss rate).
+// Green segment growing  → Foundry under load or more expensive model called.
+
+let apimReqs = AppRequests
+| where TimeGenerated {TimeRange}
+| extend corrId = tostring(Properties["Request-X-Correlation-Id"])
+| where isnotempty(corrId)
+| project TimeGenerated, corrId, apimDurationMs = DurationMs, opId = OperationId;
+let foundryDeps = AppDependencies
+| where TimeGenerated {TimeRange}
+| extend corrId = tostring(Properties["Request-X-Correlation-Id"])
+| where isnotempty(corrId)
+| project corrId, foundryDurationMs = DurationMs, opId = OperationId;
+let appgwLogs = AGWAccessLogs
+| where TimeGenerated {TimeRange}
+| extend corrId = tostring(RequestUri)   // transactionId not always populated; use URI as fallback grouping
+| project TimeGenerated, timeTakenMs = toreal(TimeTaken) * 1000;
+apimReqs
+| join kind=leftouter foundryDeps on opId
+| extend foundryMs   = iff(isnotempty(foundryDurationMs), foundryDurationMs, 0.0)
+| extend apimOverheadMs = max_of(apimDurationMs - foundryMs, 0.0)
+| summarize
+    avgAppgwMs      = 0.0,      // App GW timing joined separately — see note below
+    avgApimOverheadMs = avg(apimOverheadMs),
+    avgFoundryMs    = avg(foundryMs)
+    by bin(TimeGenerated, 5m)
+| extend t = TimeGenerated
+| project t, ['App GW overhead'] = avgAppgwMs, ['APIM overhead'] = avgApimOverheadMs, ['Foundry inference'] = avgFoundryMs

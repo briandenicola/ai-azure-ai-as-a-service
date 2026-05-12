@@ -1,0 +1,16 @@
+// Backend Routing Report — Panel 2: Requests per Backend (stacked area chart)
+// Data source:  ApiManagementGatewayLogs
+// Parameters:   {TimeRange} — workbook time-range picker
+//               {Granularity} — chart granularity picker (1m / 5m / 15m / 30m / 1h)
+//
+// Colours: Green = Primary (East US) · Orange = Secondary (West US) · Blue = No Backend (APIM-rejected)
+// Solid orange with no green = circuit breaker fully open, all traffic on failover.
+
+ApiManagementGatewayLogs
+| where TimeGenerated {TimeRange}
+| extend Backend = case(
+    BackendUrl has "primary",   "Primary (East US)",
+    BackendUrl has "secondary", "Secondary (West US)",
+    isempty(BackendUrl),        "No Backend (APIM-rejected)",
+    "Other")
+| summarize Requests=count() by bin(TimeGenerated, {Granularity}), Backend

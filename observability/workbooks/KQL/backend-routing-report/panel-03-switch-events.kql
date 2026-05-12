@@ -1,0 +1,35 @@
+// Backend Routing Report — Panel 3: Backend Switch Events (table)
+// Data source:  ApiManagementGatewayLogs
+// Parameters:   {TimeRange} — workbook time-range picker
+//
+// Each row = one point where APIM switched from one backend to a different one compared
+// to the previous request.  Direction labels:
+//   🔴  Failover: primary → secondary (error re-routed)
+//   🔴  Failover: primary → secondary
+//   🟡  Recovery attempt: secondary → primary (failed — re-tripped)
+//   🟢  Recovery: secondary → primary (successful)
+
+ApiManagementGatewayLogs
+| where TimeGenerated {TimeRange}
+| where isnotempty(BackendUrl)
+| extend BackendRegion = iff(BackendUrl has "primary", "primary", iff(BackendUrl has "secondary", "secondary", "other"))
+| sort by TimeGenerated asc
+| extend PrevRegion = prev(BackendRegion, 1, "")
+| where BackendRegion != PrevRegion and PrevRegion != ""
+| extend Direction = case(
+    PrevRegion == "primary"   and BackendRegion == "secondary" and (ResponseCode == 429 or ResponseCode >= 500), "🔴 Failover: primary → secondary (error re-routed)",
+    PrevRegion == "primary"   and BackendRegion == "secondary", "🔴 Failover: primary → secondary",
+    PrevRegion == "secondary" and BackendRegion == "primary"   and (ResponseCode == 429 or ResponseCode >= 500), "🟡 Recovery attempt: secondary → primary (failed — re-tripped)",
+    PrevRegion == "secondary" and BackendRegion == "primary",   "🟢 Recovery: secondary → primary (successful)",
+    strcat(PrevRegion, " → ", BackendRegion))
+| project
+    TimeGenerated,
+    Direction,
+    ResponseCode,
+    BackendResponseCode,
+    ['TotalTime (ms)']   = TotalTime,
+    ['BackendTime (ms)'] = BackendTime,
+    LastErrorReason,
+    LastErrorMessage,
+    ApimSubscriptionId
+| order by TimeGenerated desc

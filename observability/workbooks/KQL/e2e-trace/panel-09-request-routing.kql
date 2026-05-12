@@ -1,0 +1,60 @@
+// E2E Trace — Panel 9: Request Routing Client → APIM → Foundry Backend (table, up to 1 000 rows)
+// Data source:  AppRequests joined to AppDependencies and AGWAccessLogs
+// Parameters:   {TimeRange}        — workbook time-range picker
+//               {SubscriptionName} — LOB subscription filter (value:all = no filter)
+//               {CorrelationId}    — filter to a single request (empty = all)
+//
+// Exact AGW join: corrId = "clientIp-clientPort" matches AGWAccessLogs ClientIp + ClientPort.
+// Click any row to populate the Correlation ID filter and drive the waterfall in Panel 10.
+
+let filter_corrId = "{CorrelationId}";
+let apim = AppRequests
+| where TimeGenerated {TimeRange}
+| extend corrId          = tostring(Properties["Request-X-Correlation-Id"])
+| extend apimProduct     = tostring(Properties["Product Name"])
+| extend apimSub         = tostring(Properties["Subscription Name"])
+| extend apiName         = tostring(Properties["API Name"])
+| where isnotempty(corrId)
+| where filter_corrId == "" or corrId == filter_corrId
+| where "{SubscriptionName}" == "value:all" or apimSub == "{SubscriptionName}"
+| project apimTime=TimeGenerated, corrId, OperationId, apimDurationMs=DurationMs,
+          apimStatus=ResultCode, apimSuccess=Success, apimProduct, apimSub, apiName, Url;
+let foundry = AppDependencies
+| where TimeGenerated {TimeRange}
+| extend corrId = tostring(Properties["Request-X-Correlation-Id"])
+| where isnotempty(corrId)
+| where filter_corrId == "" or corrId == filter_corrId
+| project OperationId, foundryDurationMs=DurationMs,
+          foundryTarget=Target, foundryStatus=ResultCode, foundrySuccess=Success;
+let agw = AGWAccessLogs
+| where TimeGenerated {TimeRange}
+| extend corrId = strcat(ClientIp, "-", tostring(ClientPort))
+| where filter_corrId == "" or corrId == filter_corrId
+| project agwTime=TimeGenerated, corrId,
+          agwTotalMs = toreal(TimeTaken) * 1000,
+          agwStatus=HttpStatus, agwClient=ClientIp;
+apim
+| join kind=leftouter (foundry) on OperationId
+| join kind=leftouter (agw) on corrId
+| extend foundryHost = tostring(split(foundryTarget, "/")[2])
+| extend foundryRegion = case(
+    foundryHost contains "primary",   "Primary (East US)",
+    foundryHost contains "secondary", "Secondary (West US)",
+    foundryHost)
+| extend apimOverheadMs = max_of(apimDurationMs - iff(isnotempty(foundryDurationMs), foundryDurationMs, 0.0), 0.0)
+| extend agwOverheadMs  = max_of(agwTotalMs - apimDurationMs, 0.0)
+| sort by isnotnull(foundryDurationMs) desc, apimTime desc
+| project
+    Time              = apimTime,
+    ['Corr ID']       = corrId,
+    ['Client IP']     = agwClient,
+    ['Product']       = apimProduct,
+    ['Subscription']  = apimSub,
+    ['→ APIM']        = 'apim-contoso-vdls2xyq',
+    ['→ Foundry']     = foundryRegion,
+    ['AGW (ms)']      = round(agwOverheadMs, 1),
+    ['APIM ovhd (ms)']= round(apimOverheadMs, 1),
+    ['Foundry (ms)']  = round(foundryDurationMs, 1),
+    ['Total (ms)']    = round(agwTotalMs, 1),
+    ['HTTP']          = apimStatus,
+    ['OK']            = apimSuccess

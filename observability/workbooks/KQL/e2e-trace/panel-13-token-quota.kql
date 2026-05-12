@@ -1,0 +1,51 @@
+// E2E Trace — Panel 13: Token Quota Utilization (table)
+// Data source:  AppRequests joined to AppDependencies
+//               (token counts from Response-Header-X-Tokens-Used)
+// Parameters:   {TimeRange}        — workbook time-range picker
+//               {SubscriptionName} — LOB subscription filter (value:all = no filter)
+//
+// Prerequisite: X-Tokens-Used header must be captured in APIM diagnostics, and
+// azure-openai-emit-token-metric policy must be active.  Run azd provision once to enable.
+//
+// Subscription names match APIM subscription display names (context.Subscription.Name).
+// TPM Cap reflects product tier: Bronze 500 · Silver 5 000 · Gold 5 500.
+// % of Cap approaching 100% = subscription is close to being throttled.
+
+let caps = datatable(sub:string, TPMCap:long) [
+    "app-branch-advisor",      500,
+    "app-aml-screening",       5000,
+    "app-credit-underwriting", 5000,
+    "Investment-Platform",     5500
+];
+let apim = AppRequests
+| where TimeGenerated {TimeRange}
+| extend sub    = tostring(Properties["Subscription Name"])
+| extend corrId = tostring(Properties["Request-X-Correlation-Id"])
+| where isnotempty(sub) and isnotempty(corrId)
+| where "{SubscriptionName}" == "value:all" or sub == "{SubscriptionName}"
+| project corrId, sub, opId = OperationId, TimeGenerated;
+let tokens = AppDependencies
+| where TimeGenerated {TimeRange}
+| extend corrId = tostring(Properties["Request-X-Correlation-Id"])
+| extend totalTokens = toint(Properties["Response-Header-X-Tokens-Used"])
+| where isnotempty(corrId)
+| project corrId, opId = OperationId, totalTokens;
+apim
+| join kind=leftouter tokens on opId
+| where isnotempty(sub)
+| summarize
+    TotalTokens = sum(iff(totalTokens > 0, totalTokens, 0)),
+    Requests    = count(),
+    WindowMins  = datetime_diff('minute', max(TimeGenerated), min(TimeGenerated))
+  by sub
+| extend AvgTPM = round(toreal(TotalTokens) / max_of(toreal(WindowMins), 1.0), 0)
+| join kind=leftouter caps on sub
+| extend ['% of Cap'] = iff(TPMCap > 0, round(100.0 * AvgTPM / toreal(TPMCap), 1), real(0))
+| project
+    Subscription    = sub,
+    Requests,
+    ['Total Tokens'] = TotalTokens,
+    ['Avg TPM']      = AvgTPM,
+    ['TPM Cap']      = TPMCap,
+    ['% of Cap']
+| sort by Subscription asc

@@ -1,0 +1,53 @@
+// E2E Trace — Panel 6: APIM + Foundry Per-Request Trace (table, up to 1 000 rows)
+// Data source:  AppRequests joined to AppDependencies via OperationId
+//               (exact match via Request-X-Correlation-Id)
+// Parameters:   {TimeRange}        — workbook time-range picker
+//               {SubscriptionName} — LOB subscription filter (value:all = no filter)
+//               {CorrelationId}    — filter to a single request (empty = all)
+//
+// Every row = exactly one real request.  No cross-request contamination.
+// Click any row to populate the Correlation ID filter and see the waterfall in Panel 10.
+// AGW data is intentionally NOT joined here — see Panel 6b (agw-table) for AGW access logs.
+
+let filter_corrId = "{CorrelationId}";
+let apimRows = AppRequests
+| where TimeGenerated {TimeRange}
+| extend corrId = tostring(Properties["Request-X-Correlation-Id"])
+| extend apimSubscription = tostring(Properties["Subscription Name"])
+| where isnotempty(corrId)
+| where filter_corrId == "" or corrId == filter_corrId
+| where "{SubscriptionName}" == "value:all" or apimSubscription == "{SubscriptionName}"
+| project
+    corrId,
+    opId             = OperationId,
+    apimStart        = TimeGenerated,
+    apimDurationMs   = DurationMs,
+    apimStatus       = ResultCode,
+    url              = Url,
+    apimProduct      = tostring(Properties["Product Name"]),
+    apimSubscription,
+    backendUsed      = tostring(Properties["Response-X-Backend-Region-Used"]);
+let foundryRows = AppDependencies
+| where TimeGenerated {TimeRange}
+| extend corrId = tostring(Properties["Request-X-Correlation-Id"])
+| where isnotempty(corrId)
+| where filter_corrId == "" or corrId == filter_corrId
+| summarize
+    foundryDurationMs = avg(DurationMs),
+    foundryStatus     = any(ResultCode),
+    foundryTarget     = any(Target)
+    by corrId, opId = OperationId;
+apimRows
+| join kind=leftouter foundryRows on opId
+| sort by apimStart desc
+| project
+    Time             = apimStart,
+    ['Corr ID']      = corrId,
+    ['URL']          = url,
+    ['APIM HTTP']    = apimStatus,
+    ['APIM (ms)']    = round(apimDurationMs, 1),
+    ['Foundry Backend'] = iff(isempty(backendUsed), 'primary', backendUsed),
+    ['Foundry HTTP'] = foundryStatus,
+    ['Foundry (ms)'] = round(foundryDurationMs, 1),
+    ['Product']      = apimProduct,
+    ['Subscription'] = apimSubscription

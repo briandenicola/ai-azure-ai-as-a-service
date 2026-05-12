@@ -1,0 +1,21 @@
+// E2E Trace — Panel 11: Per-Model Usage Breakdown (table)
+// Data source:  AppRequests (model extracted from deployment URL path)
+// Parameters:   {TimeRange}        — workbook time-range picker
+//               {SubscriptionName} — LOB subscription filter (value:all = no filter)
+//
+// Model name extracted from: /openai/deployments/<model>/chat/completions
+// No policy changes required — model is always present in AppRequests.Url.
+// One row per (model, subscription) combination.
+
+AppRequests
+| where TimeGenerated {TimeRange}
+| extend sub   = tostring(Properties["Subscription Name"])
+| extend model = extract(@"deployments/([^/]+)/", 1, Url)
+| where isnotempty(model) and isnotempty(sub)
+| where "{SubscriptionName}" == "value:all" or sub == "{SubscriptionName}"
+| summarize
+    Requests = count(),
+    Errors   = countif(Success == false),
+    ['Avg (ms)'] = round(avg(DurationMs), 0)
+  by Model = model, Subscription = sub
+| sort by Model asc, Subscription asc

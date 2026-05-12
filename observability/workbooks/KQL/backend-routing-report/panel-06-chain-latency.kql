@@ -1,0 +1,28 @@
+// Backend Routing Report — Panel 6: Full Chain Latency AppGW → APIM → Foundry (line chart)
+// Data source:  ApiManagementGatewayLogs joined to AGWAccessLogs
+// Parameters:   {TimeRange} — workbook time-range picker
+//               {Granularity} — chart granularity picker (1m / 5m / 15m / 30m / 1h)
+//
+// Six series: P50 and P90 for AppGW, APIM Total, and Backend (Foundry only).
+// Backend spike = Foundry bottleneck.  APIM overhead spike = policy issue.
+// AppGW − APIM gap = WAF inspection or TLS renegotiation overhead.
+
+let apim = ApiManagementGatewayLogs
+| where TimeGenerated {TimeRange}
+| where isnotempty(BackendUrl)
+| summarize
+    ['APIM Total P50 (ms)']        = percentile(TotalTime,   50),
+    ['APIM Total P90 (ms)']        = percentile(TotalTime,   90),
+    ['Backend (Foundry) P50 (ms)'] = percentile(BackendTime, 50),
+    ['Backend (Foundry) P90 (ms)'] = percentile(BackendTime, 90)
+  by bin(TimeGenerated, {Granularity});
+let agw = AGWAccessLogs
+| where TimeGenerated {TimeRange}
+| summarize
+    ['AppGW P50 (ms)'] = round(percentile(TimeTaken, 50) * 1000, 0),
+    ['AppGW P90 (ms)'] = round(percentile(TimeTaken, 90) * 1000, 0)
+  by bin(TimeGenerated, {Granularity});
+agw
+| join kind=leftouter (apim) on TimeGenerated
+| project-away TimeGenerated1
+| order by TimeGenerated asc

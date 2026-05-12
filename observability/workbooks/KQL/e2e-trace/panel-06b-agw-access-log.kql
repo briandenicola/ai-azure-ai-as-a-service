@@ -1,0 +1,25 @@
+// E2E Trace — Panel 6b: App Gateway Access Log (table, latest 500 rows)
+// Data source:  AGWAccessLogs
+// Parameters:   {TimeRange} — workbook time-range picker
+//
+// All requests the gateway received, including those shed before reaching APIM:
+// WAF blocks, rate-limit drops, and connection resets.
+// Because AGW has no per-request UUID this data is shown separately rather than
+// joined to the APIM rows in Panel 6.
+//
+// How to use alongside Panel 6:
+//   A 429/403 here with no matching Corr ID in Panel 6 = gateway rejected it before forwarding.
+//   A request in both tables (same time window, same client IP) = successful end-to-end flow.
+
+AGWAccessLogs
+| where TimeGenerated {TimeRange}
+| sort by TimeGenerated desc
+| project
+    Time         = TimeGenerated,
+    ['AGW HTTP'] = HttpStatus,
+    ['AGW (ms)'] = round(toreal(TimeTaken) * 1000, 1),
+    ['Client IP'] = ClientIp,
+    ['URL']       = RequestUri,
+    ['Method']    = HttpMethod,
+    ['SSL']       = SslEnabled,
+    ['User Agent'] = UserAgent

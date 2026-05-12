@@ -1,0 +1,15 @@
+// Backend Routing Report — Panel 4: Primary Backend Failures per Minute (bar chart)
+// Data source:  ApiManagementGatewayLogs (filtered to primary backend errors only)
+// Parameters:   {TimeRange} — workbook time-range picker
+//
+// Always 1-minute buckets regardless of Chart Granularity to preserve threshold accuracy.
+// Red line at y=5 is the circuit breaker threshold from circuit-breaker-multi-region.xml.
+// Bars above 5 = circuit breaker tripped.
+
+ApiManagementGatewayLogs
+| where TimeGenerated {TimeRange}
+| where BackendUrl has "primary"
+| where ResponseCode >= 400 or BackendResponseCode >= 400
+| summarize FailuresToPrimary=count() by bin(TimeGenerated, 1m)
+| extend CircuitBreakerThreshold = 5
+| order by TimeGenerated asc
