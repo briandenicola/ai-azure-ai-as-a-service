@@ -14,6 +14,9 @@ __pycache__/
 .venv/
 *.egg-info/
 
+# scripts/ local config — subscription IDs and resource names, never commit
+scripts/platform.env
+
 # LOB apps — belt-and-suspenders safety net so env files can never leak
 # even if a new LOB is added without its own .gitignore
 lobs/**/.env

@@ -25,6 +25,20 @@ function _Resolve-AzdEnv {
     return ($line.ToString() -replace "^$VarName=`"?|`"?$", '').Trim()
 }
 
+# ── platform.env — load once into env vars as a low-priority fallback ─────────
+# Sits between azd-env and az-CLI auto-discovery. Values here are never
+# overwritten — env vars already set by the caller always win.
+$_platformEnvFile = Join-Path $PSScriptRoot 'platform.env'
+if (Test-Path $_platformEnvFile) {
+    Get-Content $_platformEnvFile | ForEach-Object {
+        if ($_ -match '^\s*#' -or $_ -notmatch '=') { return }   # skip comments / blank lines
+        $k, $v = ($_ -split '=', 2).Trim()
+        if ($v -and -not (Get-Item "env:$k" -ErrorAction SilentlyContinue)) {
+            Set-Item "env:$k" $v
+        }
+    }
+}
+
 # ── Subscription & resource group ────────────────────────────────────────────
 $SUB_ID = $env:AZURE_SUBSCRIPTION_ID
 if (-not $SUB_ID) { $SUB_ID = _Resolve-AzdEnv 'AZURE_SUBSCRIPTION_ID' }
