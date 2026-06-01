@@ -1,22 +1,22 @@
 # Workbooks Reference
 
-Two workbooks are deployed by `azd provision` into `rg-contoso-ai-platform-dev`. They answer different operational questions and draw from different data sources — they are intentionally kept separate.
+Three workbooks are deployed by `azd provision` into `rg-contoso-ai-platform-dev`. They answer different operational questions and draw from different data sources — they are intentionally kept separate.
 
-| | Backend Routing Report | End-to-End Trace |
-|---|---|---|
-| **Primary audience** | Platform ops / SRE | LOB teams, developers, product owners |
-| **Primary question** | Is the circuit breaker tripping? Which Foundry region is serving traffic? | Which LOB is calling what, how long did each layer take, am I hitting quota? |
-| **Data source** | `ApiManagementGatewayLogs`, `AGWAccessLogs` | `AppRequests`, `AppDependencies` (exact join), `AGWAccessLogs` (separate table), `AGWFirewallLogs` |
-| **Ingestion delay** | ~30 seconds — unsampled | 2–5 minutes — subject to App Insights sampling |
-| **Granularity** | Aggregate trends; per-switch-event rows | Per-request rows; per-layer waterfall |
-| **Use for incidents** | Yes — start here (fastest data) | Post-incident root-cause analysis |
-| **Default time range** | Last 1 hour | Last 4 hours |
-| **Filters** | Time Range, Chart Granularity | Time Range, Subscription (LOB filter), Correlation ID |
+| | Backend Routing Report | End-to-End Trace | Platform Health |
+|---|---|---|---|
+| **Primary audience** | Platform ops / SRE | LOB teams, developers, product owners | Platform ops / capacity planning |
+| **Primary question** | Is the circuit breaker tripping? Which Foundry region is serving traffic? | Which LOB is calling what, how long did each layer take, am I hitting quota? | What is the platform-wide TPM, RPM, and latency percentile trend? |
+| **Data source** | `ApiManagementGatewayLogs`, `AGWAccessLogs` | `AppRequests`, `AppDependencies` (exact join), `AGWAccessLogs` (separate table), `AGWFirewallLogs` | `ApiManagementGatewayLogs`, `AGWAccessLogs` (latency/RPM), `AppRequests` + `AppDependencies` (TPM) |
+| **Ingestion delay** | ~30 seconds — unsampled | 2–5 minutes — subject to App Insights sampling | Latency/RPM: ~30 s · TPM: 2–5 min |
+| **Granularity** | Aggregate trends; per-switch-event rows | Per-request rows; per-layer waterfall | Time-series trends; no per-request rows |
+| **Use for incidents** | Yes — start here (fastest data) | Post-incident root-cause analysis | Capacity planning; sustained load review |
+| **Default time range** | Last 1 hour | Last 4 hours | Last 1 hour |
+| **Filters** | Time Range, Chart Granularity | Time Range, Subscription (LOB filter), Correlation ID | Time Range, Chart Granularity, Subscription (LOB filter) |
 
-The KQL for every panel is available as standalone `.kql` files in [`KQL/backend-routing-report/`](KQL/backend-routing-report/) and [`KQL/e2e-trace/`](KQL/e2e-trace/). Use them to run queries directly in Log Analytics, build alerts, or validate behaviour without opening the workbook UI.
+The KQL for every panel is available as standalone `.kql` files in [`KQL/backend-routing-report/`](KQL/backend-routing-report/), [`KQL/e2e-trace/`](KQL/e2e-trace/), and [`KQL/platform-health/`](KQL/platform-health/). Use them to run queries directly in Log Analytics, build alerts, or validate behaviour without opening the workbook UI.
 
 After `azd provision`, find your workbooks in the Azure portal:
-**Azure Monitor → Workbooks** — filter by your resource group (`rg-contoso-ai-platform-<env>`). Both workbooks appear with their display names.
+**Azure Monitor → Workbooks** — filter by your resource group (`rg-contoso-ai-platform-<env>`). All three workbooks appear with their display names.
 
 ---
 
@@ -502,3 +502,98 @@ One row per subscription showing average TPM consumed vs the product tier cap.
 | `Avg TPM` | Average tokens per minute over the selected window |
 | `TPM Cap` | Product tier limit: Bronze 500 · Silver 5 000 · Gold 5 500 |
 | `% of Cap` | `Avg TPM / TPM Cap × 100` — use this to spot subscriptions approaching their quota |
+
+---
+
+## Workbook 3 — Azure AI Platform Health
+
+**File:** `observability/workbooks/platform-health.workbook.json`
+
+**Use this when:**
+- You want a rolling time-series view of platform-wide TPM (not just a static average)
+- You need to compare total RPM against per-LOB breakdown simultaneously
+- You are doing capacity planning and want to see how close the platform is to Foundry's shared 1 000 TPM primary cap
+- You want latency percentiles (P50/P95/P99) per layer as trends, not a single aggregate number
+- You are reviewing the impact of a model change, traffic shift, or load test across all three metrics
+
+**Data sources:**
+
+| Panel | Source | Ingestion delay |
+|---|---|---|
+| TPM over time | `AppRequests` + `AppDependencies` (token header) | 2–5 min (App Insights) |
+| Overall RPM | `ApiManagementGatewayLogs` | ~30 s (unsampled) |
+| RPM by LOB | `ApiManagementGatewayLogs` | ~30 s (unsampled) |
+| Latency percentiles | `ApiManagementGatewayLogs` + `AGWAccessLogs` | ~30 s (unsampled) |
+
+**Filters:**
+
+| Filter | Values | Effect |
+|---|---|---|
+| **Time Range** | 5 min / 15 min / 30 min / 1 hr / 4 hr / 12 hr / 1 day | Scopes every panel |
+| **Chart Granularity** | 1 min / 5 min / 15 min / 30 min / 1 hr | Controls time-bucket width; RPM and TPM are normalised to tokens-per-minute equivalent regardless of bucket |
+| **Subscription** | All or one LOB | Narrows TPM and RPM panels to that LOB (latency percentile panel shows platform-wide regardless) |
+
+---
+
+### Panel 1 — TPM Over Time (stacked area chart)
+
+**Visualization:** Stacked area chart  
+**Data source:** `AppRequests` joined to `AppDependencies`  
+**KQL:** [panel-01-tpm-over-time.kql](KQL/platform-health/panel-01-tpm-over-time.kql)
+
+One coloured band per APIM subscription (LOB). TPM is normalised to tokens-per-minute regardless of the bucket width selected.
+
+**Foundry primary cap line: 1 000 TPM** — when combined bands approach this level, expect 429s on the primary backend and circuit-breaker failover to secondary (West US, 30K TPM). Cross-reference with the Backend Routing Report.
+
+| Band | Description |
+|---|---|
+| Each colour | One APIM subscription (LOB) |
+| Combined height | Total platform TPM |
+
+---
+
+### Panel 2a — Overall Platform RPM (line chart)
+
+**Visualization:** Line chart (single series)  
+**Data source:** `ApiManagementGatewayLogs`  
+**KQL:** [panel-02a-rpm-total.kql](KQL/platform-health/panel-02a-rpm-total.kql)
+
+Total requests/min across all subscriptions, normalised to the selected bucket width. Use alongside the TPM chart: RPM flat + TPM rising = requests using more tokens (larger prompts or longer responses); RPM rising + TPM flat = shorter requests, same aggregate load.
+
+---
+
+### Panel 2b — RPM by LOB Subscription (stacked area chart)
+
+**Visualization:** Stacked area chart  
+**Data source:** `ApiManagementGatewayLogs`  
+**KQL:** [panel-02b-rpm-by-subscription.kql](KQL/platform-health/panel-02b-rpm-by-subscription.kql)
+
+One coloured band per APIM subscription key, showing how load is distributed across LOBs over time.
+
+**What to look for:**
+- A single band dominating → that LOB is close to its product RPM limit
+- Multiple bands growing simultaneously → combined load risk on Foundry primary pool
+
+---
+
+### Panel 3 — Latency Percentiles per Layer (multi-line chart)
+
+**Visualization:** Line chart (9 series)  
+**Data source:** `ApiManagementGatewayLogs` joined to `AGWAccessLogs` (time-bucket join)  
+**KQL:** [panel-03-latency-percentiles-per-layer.kql](KQL/platform-health/panel-03-latency-percentiles-per-layer.kql)
+
+Nine time-series lines: **P50 · P95 · P99** per layer.
+
+| Layer | Colour family | Source | Healthy P99 |
+|---|---|---|---|
+| **App Gateway WAF** | 🔵 Blue (light→dark) | `AGWAccessLogs.TimeTaken × 1000` | < 200 ms |
+| **APIM overhead** | 🟠 Orange (light→dark) | `TotalTime − BackendTime` | < 100 ms |
+| **Foundry inference** | 🟢 Green (light→dark) | `BackendTime` | < 3 000 ms (gpt-4o-mini) |
+
+**How to read this chart:**
+- P50 and P99 diverging widely = bimodal traffic (cache hits vs cold inference in the same bucket)
+- Foundry P99 spike = model cold start or failover latency (+300–500 ms for West US secondary)
+- APIM overhead P99 spike = policy stall (semantic cache miss storm, synchronous Key Vault lookup)
+- App GW P99 spike = WAF rule firing on a subset of requests — correlate with `AGWFirewallLogs`
+
+> **Join note:** App GW metrics are joined to APIM by time bucket only (no per-request correlation available from `AGWAccessLogs`). The App GW percentile lines are therefore independent aggregates per bucket, not stitched to individual APIM requests. For per-request App GW timing, use the E2E Trace workbook.

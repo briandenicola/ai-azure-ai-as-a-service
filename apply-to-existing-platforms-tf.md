@@ -505,13 +505,20 @@ Enforces per-LOB token-per-minute limits. Add `X-Tokens-Used` to your outbound p
 ```xml
 <outbound>
   <base />
-  <!-- Emit token count from Foundry's usage response -->
-  <set-header name="X-Tokens-Used" exists-action="override">
-    <value>@{
-      var body = context.Response.Body.As<JObject>(preserveContent: true);
-      return body?["usage"]?["total_tokens"]?.ToString() ?? "0";
-    }</value>
-  </set-header>
+  <!-- Emit token count from Foundry's usage response.
+       Only on 200 — avoids reading the body on 429/5xx error responses.
+       preserveContent: true ensures the response body is still streamed to the caller. -->
+  <choose>
+    <when condition="@(context.Response.StatusCode == 200)">
+      <set-variable name="totalTokens" value="@{
+        try { return context.Response.Body.As<JObject>(preserveContent: true)?["usage"]?["total_tokens"]?.ToString() ?? "0"; }
+        catch { return "0"; }
+      }" />
+      <set-header name="X-Tokens-Used" exists-action="override">
+        <value>@((string)context.Variables.GetValueOrDefault("totalTokens", "0"))</value>
+      </set-header>
+    </when>
+  </choose>
 </outbound>
 ```
 

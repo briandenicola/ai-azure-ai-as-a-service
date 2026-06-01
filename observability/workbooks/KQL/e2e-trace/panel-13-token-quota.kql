@@ -1,6 +1,6 @@
 // E2E Trace — Panel 13: Token Quota Utilization (table)
-// Data source:  AppRequests joined to AppDependencies
-//               (token counts from Response-Header-X-Tokens-Used)
+// Data source:  AppRequests
+//               (token counts from Response-X-Tokens-Used)
 // Parameters:   {TimeRange}        — workbook time-range picker
 //               {SubscriptionName} — LOB subscription filter (value:all = no filter)
 //
@@ -17,24 +17,14 @@ let caps = datatable(sub:string, TPMCap:long) [
     "app-credit-underwriting", 5000,
     "Investment-Platform",     5500
 ];
-let apim = AppRequests
+AppRequests
 | where TimeGenerated {TimeRange}
-| extend sub    = tostring(Properties["Subscription Name"])
-| extend corrId = tostring(Properties["Request-X-Correlation-Id"])
-| where isnotempty(sub) and isnotempty(corrId)
+| extend sub         = tostring(Properties["Subscription Name"])
+| extend totalTokens = toint(Properties["Response-X-Tokens-Used"])
+| where isnotempty(sub) and totalTokens > 0
 | where "{SubscriptionName}" == "value:all" or sub == "{SubscriptionName}"
-| project corrId, sub, opId = OperationId, TimeGenerated;
-let tokens = AppDependencies
-| where TimeGenerated {TimeRange}
-| extend corrId = tostring(Properties["Request-X-Correlation-Id"])
-| extend totalTokens = toint(Properties["Response-Header-X-Tokens-Used"])
-| where isnotempty(corrId)
-| project corrId, opId = OperationId, totalTokens;
-apim
-| join kind=leftouter tokens on opId
-| where isnotempty(sub)
 | summarize
-    TotalTokens = sum(iff(totalTokens > 0, totalTokens, 0)),
+    TotalTokens = sum(totalTokens),
     Requests    = count(),
     WindowMins  = datetime_diff('minute', max(TimeGenerated), min(TimeGenerated))
   by sub

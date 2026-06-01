@@ -73,5 +73,34 @@ resource e2eTraceWorkbook 'Microsoft.Insights/workbooks@2022-04-01' = {
   }
 }
 
-output workbookId    string = backendRoutingWorkbook.id
-output e2eWorkbookId string = e2eTraceWorkbook.id
+// ---------------------------------------------------------------------------
+// Workbook 3: Platform Health Dashboard
+// Shows platform-wide TPM over time (per LOB), overall and per-LOB RPM, and
+// latency percentiles (P50/P95/P99) across all three layers:
+//   App Gateway WAF  →  APIM Gateway overhead  →  Foundry inference
+//
+// Data sources: ApiManagementGatewayLogs + AGWAccessLogs (TPM/RPM/latency)
+//               AppRequests + AppDependencies (TPM via X-Tokens-Used header)
+// ---------------------------------------------------------------------------
+var phRawContent    = loadTextContent('../../observability/workbooks/platform-health.workbook.json')
+var phSerializedData = replace(phRawContent, placeholderWorkspaceId, logAnalyticsWorkspaceId)
+
+var platformHealthWorkbookId = guid(resourceGroup().id, 'platform-health')
+
+resource platformHealthWorkbook 'Microsoft.Insights/workbooks@2022-04-01' = {
+  name: platformHealthWorkbookId
+  location: location
+  kind: 'shared'
+  tags: tags
+  properties: {
+    displayName: 'Azure AI Platform Health — TPM · RPM · Latency Percentiles'
+    serializedData: phSerializedData
+    version: '1.0'
+    sourceId: logAnalyticsWorkspaceId
+    category: 'workbook'
+  }
+}
+
+output workbookId            string = backendRoutingWorkbook.id
+output e2eWorkbookId         string = e2eTraceWorkbook.id
+output platformHealthWorkbookId string = platformHealthWorkbook.id

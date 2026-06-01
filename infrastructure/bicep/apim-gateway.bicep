@@ -762,6 +762,17 @@ resource openaiInferenceApiPolicy 'Microsoft.ApiManagement/service/apis/policies
     <set-header name="X-Backend-Region-Used" exists-action="override">
       <value>@(context.Variables.GetValueOrDefault("selectedBackend", "primary"))</value>
     </set-header>
+    <choose>
+      <when condition="@(context.Response.StatusCode == 200)">
+        <set-variable name="totalTokens" value="@{
+          try { return context.Response.Body.As<JObject>(preserveContent: true)?["usage"]?["total_tokens"]?.ToString() ?? "0"; }
+          catch { return "0"; }
+        }" />
+        <set-header name="X-Tokens-Used" exists-action="override">
+          <value>@((string)context.Variables.GetValueOrDefault("totalTokens", "0"))</value>
+        </set-header>
+      </when>
+    </choose>
   </outbound>
   <on-error>
     <base />

@@ -47,13 +47,11 @@ $appgwFqdn = az network public-ip list -g $RG `
     --query "[?contains(name,'agw')].dnsSettings.fqdn" -o tsv 2>$null |
     Select-Object -First 1
 
-$endpoint = if ($appgwFqdn) {
-    Write-Host "  Via App Gateway: $appgwFqdn" -ForegroundColor Green
-    "https://$appgwFqdn"
-} else {
-    Write-Host "  App Gateway not deployed — calling APIM directly." -ForegroundColor Yellow
-    "https://$apimName.azure-api.net"
+if (-not $appgwFqdn) {
+    Write-Error "App Gateway not found in '$RG'. Smoke test requires the full production path (AGW → APIM → Foundry) to produce representative results. Run: azd provision"
 }
+Write-Host "  Via App Gateway: $appgwFqdn" -ForegroundColor Green
+$endpoint = "https://$appgwFqdn"
 
 # ---------------------------------------------------------------------------
 # Send test request

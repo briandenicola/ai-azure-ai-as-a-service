@@ -1,0 +1,35 @@
+// Platform Health — Panel 1: TPM Over Time (stacked area chart)
+// Data source:  AppRequests (token counts from Response-X-Tokens-Used)
+// Parameters:   {TimeRange}        — workbook time-range picker
+//               {Granularity}      — chart granularity picker (1m / 5m / 15m / 30m / 1h)
+//               {SubscriptionName} — LOB subscription filter (value:all = no filter)
+//
+// Requires: APIM outbound policy setting X-Tokens-Used on 200 responses (deployed via azd provision).
+// Token counts come from the X-Tokens-Used response header set by the policy in the outbound
+// section.  APIM diagnostic (apim-gateway.bicep) captures it via frontend.response.headers,
+// so it lands in AppRequests.Properties["Response-X-Tokens-Used"] — NOT AppDependencies.
+//
+// Each coloured band = one APIM subscription (LOB).
+// TPM is normalised to the granularity bucket width so the y-axis is always tokens/minute
+// regardless of the selected bucket size.
+//
+// Thresholds to watch:
+//   Bronze cap:  500 TPM/sub
+//   Silver cap: 5000 TPM/sub
+//   Gold cap:   5500 TPM/sub
+//   Foundry primary: 1000 TPM total shared pool (East US)
+// A combined platform TPM line approaching 1000 indicates primary Foundry saturation
+// and should correlate with circuit-breaker trips in the Backend Routing Report.
+
+let sub_filter  = "{SubscriptionName}";
+let bucket_secs = totimespan("{Granularity}") / 1s;         // granularity in seconds
+AppRequests
+| where TimeGenerated {TimeRange}
+| extend sub      = tostring(Properties["Subscription Name"])
+| extend totalTok = toint(Properties["Response-X-Tokens-Used"])
+| where isnotempty(sub) and totalTok > 0
+| where sub_filter == "value:all" or sub == sub_filter
+| summarize BucketTokens = sum(totalTok) by bin(TimeGenerated, {Granularity}), sub
+| extend TPM = round(toreal(BucketTokens) / max_of(toreal(bucket_secs) / 60.0, 1.0), 1)
+| project TimeGenerated, Subscription = sub, TPM
+| sort by TimeGenerated asc

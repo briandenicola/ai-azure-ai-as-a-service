@@ -1,0 +1,224 @@
+{
+  "version": "Notebook/1.0",
+  "items": [
+    {
+      "type": 9,
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "crossComponentResources": [
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+        ],
+        "parameters": [
+          {
+            "id": "ph-tr-param",
+            "version": "KqlParameterItem/1.0",
+            "name": "TimeRange",
+            "label": "Time Range",
+            "type": 4,
+            "isRequired": true,
+            "value": { "durationMs": 3600000 },
+            "typeSettings": {
+              "selectableValues": [
+                { "durationMs": 300000 },
+                { "durationMs": 900000 },
+                { "durationMs": 1800000 },
+                { "durationMs": 3600000 },
+                { "durationMs": 14400000 },
+                { "durationMs": 43200000 },
+                { "durationMs": 86400000 }
+              ]
+            }
+          },
+          {
+            "id": "ph-gran-param",
+            "version": "KqlParameterItem/1.0",
+            "name": "Granularity",
+            "label": "Chart Granularity",
+            "type": 2,
+            "isRequired": true,
+            "value": "5m",
+            "jsonData": "[{\"value\":\"1m\",\"label\":\"1 minute\"},{\"value\":\"5m\",\"label\":\"5 minutes\"},{\"value\":\"15m\",\"label\":\"15 minutes\"},{\"value\":\"30m\",\"label\":\"30 minutes\"},{\"value\":\"1h\",\"label\":\"1 hour\"}]",
+            "typeSettings": {
+              "additionalResourceOptions": [],
+              "showDefault": false
+            }
+          },
+          {
+            "id": "ph-sub-param",
+            "version": "KqlParameterItem/1.0",
+            "name": "SubscriptionName",
+            "label": "Subscription",
+            "type": 2,
+            "isRequired": false,
+            "isGlobal": true,
+            "query": "AppRequests\n| where TimeGenerated {TimeRange}\n| extend sub = tostring(Properties[\"Subscription Name\"])\n| where isnotempty(sub)\n| summarize by sub\n| sort by sub asc\n| project value = sub",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces",
+            "crossComponentResources": [
+              "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+            ],
+            "value": "value:all",
+            "typeSettings": {
+              "additionalResourceOptions": ["value:all"],
+              "showDefault": false
+            },
+            "defaultValue": "value:all"
+          }
+        ],
+        "style": "above",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces"
+      },
+      "name": "ph-params"
+    },
+
+    {
+      "type": 1,
+      "content": {
+        "json": "# Azure AI Platform — Health Dashboard\n\nPlatform-wide operational view of token consumption, request throughput, and latency percentiles across all layers. Use this workbook alongside the **Backend Routing Report** (circuit-breaker / failover) and the **End-to-End Trace** (per-request waterfall drill-down).\n\n| Section | What it answers |\n|---|---|\n| **Token Usage** | How many tokens per minute is the platform consuming? Which LOB is spending the most? Am I approaching Foundry's shared 1K TPM primary cap? |\n| **Request Rate** | How many requests/minute is the platform handling in total, and how is that load split across LOBs? |\n| **Latency Percentiles per Layer** | Where is the latency sitting — App Gateway WAF, APIM policy overhead, or Foundry inference? What is the P50/P95/P99 spread for each layer? |\n\n**Foundry primary shared cap: 1 000 TPM** (East US).  When the platform-wide TPM line approaches 1 000, expect circuit-breaker trips and failover to secondary (West US, 30K TPM). Correlate with the Backend Routing Report."
+      },
+      "name": "ph-header"
+    },
+
+    {
+      "type": 1,
+      "content": {
+        "json": "## Token Usage\n\nTokens per minute extracted from `Response-X-Tokens-Used` captured in `AppRequests` via APIM diagnostics. Requires the `azure-openai-emit-token-metric` policy (active after `azd provision`).\n\n**Product tier TPM caps:** Bronze 500 · Silver 5 000 · Gold 5 500. **Foundry primary pool: 1 000 TPM total** (shared across all subscriptions). When stacked bars reach ~1 000 combined, expect primary Foundry 429s and circuit-breaker failover to secondary."
+      },
+      "name": "ph-section-tpm"
+    },
+
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let sub_filter  = \"{SubscriptionName}\";\nlet bucket_secs = totimespan(\"{Granularity}\") / 1s;\nAppRequests\n| where TimeGenerated {TimeRange}\n| extend sub      = tostring(Properties[\"Subscription Name\"])\n| extend totalTok = toint(Properties[\"Response-X-Tokens-Used\"])\n| where isnotempty(sub) and totalTok > 0\n| where sub_filter == \"value:all\" or sub == sub_filter\n| summarize BucketTokens = sum(totalTok) by bin(TimeGenerated, {Granularity}), sub\n| extend TPM = round(toreal(BucketTokens) / max_of(toreal(bucket_secs) / 60.0, 1.0), 1)\n| project TimeGenerated, Subscription = sub, TPM\n| sort by TimeGenerated asc",
+        "size": 0,
+        "title": "TPM over time — stacked by LOB subscription (tokens/min normalised to bucket width)",
+        "showQuery": true,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+        ],
+        "visualization": "areachart",
+        "chartSettings": {
+          "xAxis": "TimeGenerated",
+          "yAxis": ["TPM"],
+          "group": "Subscription",
+          "createOtherGroup": 0,
+          "showLegend": true,
+          "xSettings": { "label": "Time" },
+          "ySettings": { "label": "Tokens / min", "min": 0 }
+        }
+      },
+      "name": "ph-panel-tpm"
+    },
+
+    {
+      "type": 1,
+      "content": {
+        "json": "## Request Rate\n\nRequests per minute sourced from `AppRequests` (same source as the TPM panel) so the Subscription filter works consistently across all panels.\n\n- **Platform RPM** — total requests/min, filtered by the Subscription selector above\n- **RPM by LOB** — stacked area showing which subscriptions are generating load\n\nA single LOB dominating (tall solid band) = that application is near its product rate limit. Multiple LOBs growing simultaneously = combined load risk on Foundry primary pool."
+      },
+      "name": "ph-section-rpm"
+    },
+
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let sub_filter  = \"{SubscriptionName}\";\nlet bucket_secs = totimespan(\"{Granularity}\") / 1s;\nAppRequests\n| where TimeGenerated {TimeRange}\n| extend sub = tostring(Properties[\"Subscription Name\"])\n| where isnotempty(sub)\n| where sub_filter == \"value:all\" or sub == sub_filter\n| summarize BucketRequests = count() by bin(TimeGenerated, {Granularity})\n| extend RPM = round(toreal(BucketRequests) / max_of(toreal(bucket_secs) / 60.0, 1.0), 1)\n| project TimeGenerated, ['Requests/min'] = RPM\n| sort by TimeGenerated asc",
+        "size": 0,
+        "title": "Platform RPM — total requests/min (use Subscription filter above to isolate a LOB)",
+        "showQuery": true,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+        ],
+        "visualization": "linechart",
+        "chartSettings": {
+          "xAxis": "TimeGenerated",
+          "showLegend": true,
+          "seriesLabelSettings": [
+            { "seriesName": "Requests/min", "color": "blue" }
+          ],
+          "xSettings": { "label": "Time" },
+          "ySettings": { "label": "Requests / min", "min": 0 }
+        }
+      },
+      "name": "ph-panel-rpm-total"
+    },
+
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let sub_filter  = \"{SubscriptionName}\";\nlet bucket_secs = totimespan(\"{Granularity}\") / 1s;\nAppRequests\n| where TimeGenerated {TimeRange}\n| extend sub = tostring(Properties[\"Subscription Name\"])\n| where isnotempty(sub)\n| where sub_filter == \"value:all\" or sub == sub_filter\n| summarize BucketRequests = count() by bin(TimeGenerated, {Granularity}), sub\n| extend RPM = round(toreal(BucketRequests) / max_of(toreal(bucket_secs) / 60.0, 1.0), 1)\n| project TimeGenerated, Subscription = sub, RPM\n| sort by TimeGenerated asc",
+        "size": 0,
+        "title": "RPM by LOB subscription — stacked area (use Subscription filter above to isolate one LOB)",
+        "showQuery": true,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+        ],
+        "visualization": "areachart",
+        "chartSettings": {
+          "xAxis": "TimeGenerated",
+          "yAxis": ["RPM"],
+          "group": "Subscription",
+          "createOtherGroup": 0,
+          "showLegend": true,
+          "xSettings": { "label": "Time" },
+          "ySettings": { "label": "Requests / min", "min": 0 }
+        }
+      },
+      "name": "ph-panel-rpm-by-sub"
+    },
+
+    {
+      "type": 1,
+      "content": {
+        "json": "## Latency Percentiles per Layer\n\nNine time-series lines: **P50 · P95 · P99** for each of the three platform layers. Sources from `ApiManagementGatewayLogs` (low ingestion lag, ~30 s) joined to `AGWAccessLogs` on time bucket.\n\n| Layer | Colour | Source field | Healthy P99 |\n|---|---|---|---|\n| **App Gateway** | 🔵 Blue | `AGWAccessLogs.TimeTaken × 1000` | < 200 ms (WAF + TLS) |\n| **APIM overhead** | 🟠 Orange | `TotalTime − BackendTime` | < 100 ms |\n| **Foundry inference** | 🟢 Green | `BackendTime` | < 3 000 ms (gpt-4o-mini) · < 8 000 ms (o1) |\n\n**What a wide P50→P99 spread means:**\n- Foundry: bimodal request mix (cache hits vs cold inference) or failover latency (+300–500 ms for West US secondary)\n- APIM: occasional synchronous policy stall (semantic cache miss storm, Key Vault lookup)\n- App GW: WAF rule triggering on some requests or TLS renegotiation"
+      },
+      "name": "ph-section-latency"
+    },
+
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let apim = ApiManagementGatewayLogs\n| where TimeGenerated {TimeRange}\n| where isnotempty(BackendUrl)\n| extend apimOverheadMs = max_of(toreal(TotalTime) - toreal(BackendTime), 0.0)\n| summarize\n    ['Foundry P50 (ms)']       = round(percentile(toreal(BackendTime), 50), 1),\n    ['Foundry P95 (ms)']       = round(percentile(toreal(BackendTime), 95), 1),\n    ['Foundry P99 (ms)']       = round(percentile(toreal(BackendTime), 99), 1),\n    ['APIM overhead P50 (ms)'] = round(percentile(apimOverheadMs, 50), 1),\n    ['APIM overhead P95 (ms)'] = round(percentile(apimOverheadMs, 95), 1),\n    ['APIM overhead P99 (ms)'] = round(percentile(apimOverheadMs, 99), 1)\n  by bin(TimeGenerated, {Granularity});\nlet agw = AGWAccessLogs\n| where TimeGenerated {TimeRange}\n| summarize\n    ['App GW P50 (ms)'] = round(percentile(toreal(TimeTaken), 50) * 1000, 1),\n    ['App GW P95 (ms)'] = round(percentile(toreal(TimeTaken), 95) * 1000, 1),\n    ['App GW P99 (ms)'] = round(percentile(toreal(TimeTaken), 99) * 1000, 1)\n  by bin(TimeGenerated, {Granularity});\napim\n| join kind=leftouter agw on TimeGenerated\n| project-away TimeGenerated1\n| project\n    TimeGenerated,\n    ['App GW P50 (ms)'],\n    ['App GW P95 (ms)'],\n    ['App GW P99 (ms)'],\n    ['APIM overhead P50 (ms)'],\n    ['APIM overhead P95 (ms)'],\n    ['APIM overhead P99 (ms)'],\n    ['Foundry P50 (ms)'],\n    ['Foundry P95 (ms)'],\n    ['Foundry P99 (ms)']\n| sort by TimeGenerated asc",
+        "size": 0,
+        "title": "Latency percentiles per layer — P50 · P95 · P99 for App GW (blue), APIM overhead (orange), Foundry inference (green)",
+        "showQuery": true,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+        ],
+        "visualization": "linechart",
+        "chartSettings": {
+          "xAxis": "TimeGenerated",
+          "showLegend": true,
+          "seriesLabelSettings": [
+            { "seriesName": "App GW P50 (ms)",       "color": "#2b88d8" },
+            { "seriesName": "App GW P95 (ms)",       "color": "#0078d4" },
+            { "seriesName": "App GW P99 (ms)",       "color": "#004578" },
+            { "seriesName": "APIM overhead P50 (ms)","color": "#f7c59f" },
+            { "seriesName": "APIM overhead P95 (ms)","color": "#ca5010" },
+            { "seriesName": "APIM overhead P99 (ms)","color": "#8a2500" },
+            { "seriesName": "Foundry P50 (ms)",      "color": "#bad80a" },
+            { "seriesName": "Foundry P95 (ms)",      "color": "#498205" },
+            { "seriesName": "Foundry P99 (ms)",      "color": "#107c10" }
+          ],
+          "xSettings": { "label": "Time" },
+          "ySettings": { "label": "Latency (ms)", "min": 0 }
+        }
+      },
+      "name": "ph-panel-latency-percentiles"
+    }
+  ],
+  "$schema": "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json"
+}

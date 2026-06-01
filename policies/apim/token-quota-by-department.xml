@@ -79,9 +79,9 @@ Applied to: All inbound requests to LLM endpoints
     
     <outbound>
         <!-- 1. Extract token usage from response -->
-        <set-variable name="complete-tokens" value="@(context.Response.StatusCode == 200 ? ((dynamic)context.Response.Body).usage.completion_tokens : 0)" />
-        <set-variable name="prompt-tokens" value="@(context.Response.StatusCode == 200 ? ((dynamic)context.Response.Body).usage.prompt_tokens : 0)" />
-        <set-variable name="total-tokens" value="@(context.Response.StatusCode == 200 ? ((dynamic)context.Response.Body).usage.total_tokens : 0)" />
+        <set-variable name="complete-tokens" value="@(context.Response.StatusCode == 200 ? context.Response.Body.As<JObject>(preserveContent: true)?["usage"]?["completion_tokens"]?.Value<int>() ?? 0 : 0)" />
+        <set-variable name="prompt-tokens" value="@(context.Response.StatusCode == 200 ? context.Response.Body.As<JObject>(preserveContent: true)?["usage"]?["prompt_tokens"]?.Value<int>() ?? 0 : 0)" />
+        <set-variable name="total-tokens" value="@(context.Response.StatusCode == 200 ? context.Response.Body.As<JObject>(preserveContent: true)?["usage"]?["total_tokens"]?.Value<int>() ?? 0 : 0)" />
         
         <!-- 2. Deduct from organization token bucket -->
         <!-- This would be a custom policy or Azure Function call in production -->
