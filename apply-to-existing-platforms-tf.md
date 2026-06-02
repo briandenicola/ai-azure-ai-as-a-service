@@ -45,6 +45,7 @@ If you already have APIM in front of Foundry, you are likely missing some or all
 | App Insights wired to APIM | APIM diagnostics resource | Low — adds telemetry, no traffic impact |
 | `X-Correlation-Id` header | App Gateway rewrite rule set | Low — adds a header, never blocks traffic |
 | `X-Backend-Region-Used` header | APIM policy (outbound section) | Low — adds a response header |
+| `X-Model-Name` header + model latency workbook | APIM policy (both inference APIs) + APIM diagnostics | Low — adds a response header |
 | Circuit-breaker failover policy | APIM policy (per-API) | Medium — changes routing logic |
 | Semantic caching policy | APIM policy (per-API) | Medium — new external dependency (Redis) |
 | Token quota policy | APIM product policy | Medium — rate-limiting, will return 429 |
@@ -235,12 +236,13 @@ resource "azurerm_api_management_diagnostic" "app_insights" {
   }
 
   frontend_response {
-    # These four headers drive the workbook panels:
+    # These five headers drive the workbook panels:
     #   X-Backend-Region-Used → which Foundry region served the request
     #   X-Correlation-Id      → join key between AGWAccessLogs and AppRequests
     #   X-Tokens-Used         → token quota utilization panel
     #   X-Cache               → semantic cache hit rate panel
-    headers_to_log = ["X-Backend-Region-Used", "X-Correlation-Id", "X-Tokens-Used", "X-Cache"]
+    #   X-Model-Name          → model name for the model latency workbook
+    headers_to_log = ["X-Backend-Region-Used", "X-Correlation-Id", "X-Tokens-Used", "X-Cache", "X-Model-Name"]
     body_bytes     = 0
   }
 
@@ -415,6 +417,30 @@ resource "azapi_resource" "workbook_e2e_trace" {
 
   tags = var.tags
 }
+
+resource "azapi_resource" "workbook_model_latency" {
+  type      = "Microsoft.Insights/workbooks@2023-06-01"
+  name      = "model-latency"
+  location  = var.location
+  parent_id = "/subscriptions/${var.subscription_id}/resourceGroups/${var.resource_group_name}"
+
+  body = jsonencode({
+    kind = "shared"
+    properties = {
+      displayName  = "Foundry Model Latency"
+      serializedData = replace(
+        file("${path.module}/workbooks/model-latency.workbook.json"),
+        local.placeholder_law_id,
+        data.azurerm_log_analytics_workspace.law.id
+      )
+      sourceId   = data.azurerm_log_analytics_workspace.law.id
+      category   = "workbook"
+      version    = "1.0"
+    }
+  })
+
+  tags = var.tags
+}
 ```
 
 > The `replace()` call substitutes the placeholder workspace ID (hard-coded in the workbook JSONs for use by the `azd`/Bicep path) with your real LAW resource ID. The workbook JSONs do not need to be modified on disk.
@@ -427,7 +453,7 @@ resource "azapi_resource" "workbook_e2e_trace" {
 4. Replace every occurrence of the placeholder workspace resource ID with your own LAW resource ID (find/replace on the subscription GUID)
 5. Save and pin to a dashboard
 
-Repeat for `e2e-trace.workbook.json`. Note: workbooks created via the portal are not tracked in Terraform state and will drift when the repo JSON files are updated.
+Repeat for `e2e-trace.workbook.json` and `model-latency.workbook.json`. Note: workbooks created via the portal are not tracked in Terraform state and will drift when the repo JSON files are updated.
 
 ### What you will see immediately
 
@@ -439,6 +465,7 @@ After deploying workbooks against an existing APIM that already had `GatewayLogs
 - **E2E Trace panel 10 (waterfall per request)** — needs both Step 3 and Step 4 (`X-Correlation-Id` header)
 - **E2E Trace panel 12 (cache hit rate)** — needs `X-Cache` header in your APIM policy (Step 7b below)
 - **E2E Trace panel 13 (token quota)** — needs `X-Tokens-Used` header (Step 7c below)
+- **Model Latency workbook (all panels)** — needs Step 3 (App Insights) plus `X-Model-Name` header from Step 7e below
 
 ---
 
@@ -526,6 +553,55 @@ Enforces per-LOB token-per-minute limits. Add `X-Tokens-Used` to your outbound p
 
 See `policies/apim/pci-dss-audit-logging.xml` and `docs/playbooks/pci-dss-configuration.md`. This enables logging at the detail level required for PCI DSS Requirement 10. Apply only if your API gateway is in PCI DSS scope.
 
+### 7e — Emit `X-Model-Name` for the Model Latency Workbook
+
+Adds the model name as a response header on both inference API paths. Required for the **Model Latency workbook** to break down P50/P90/P99 latency per model.
+
+**OpenAI-compatible path** (`/openai/deployments/{model}/chat/completions`) — read model name from the response body `"model"` field:
+
+```xml
+<!-- In the outbound policy of your OpenAI inference API, inside the existing status-200 block: -->
+<set-variable name="modelName" value="@{
+  try { return context.Response.Body.As<JObject>(preserveContent: true)?["model"]?.ToString() ?? ""; }
+  catch { return ""; }
+}" />
+<set-header name="X-Model-Name" exists-action="override">
+  <value>@((string)context.Variables.GetValueOrDefault("modelName", ""))</value>
+</set-header>
+```
+
+**Native Foundry inference SDK path** (`/models/chat/completions`) — the model name is in the **request** body, not the URL. Read it inbound with `preserveContent: true` before forwarding:
+
+```xml
+<!-- Inbound policy of your native inference API: -->
+<set-variable name="requestedModel" value="@{
+  try { return context.Request.Body.As<JObject>(preserveContent: true)?["model"]?.ToString() ?? ""; }
+  catch { return ""; }
+}" />
+<!-- Outbound policy: -->
+<set-header name="X-Model-Name" exists-action="override">
+  <value>@((string)context.Variables.GetValueOrDefault("requestedModel", ""))</value>
+</set-header>
+```
+
+> **`preserveContent: true` is critical** — omitting it consumes the body, leaving the backend or caller with an empty payload. Always pass `preserveContent: true` when reading `JObject` in APIM policies.
+
+For Terraform, apply each policy fragment using `azurerm_api_management_api_policy` targeting the respective API:
+
+```hcl
+resource "azurerm_api_management_api_policy" "openai_inference" {
+  # ... target your OpenAI-compatible inference API ...
+  xml_content = file("${path.module}/policies/openai-inference.xml")
+}
+
+resource "azurerm_api_management_api_policy" "model_inference" {
+  # ... target your native Foundry inference API ...
+  xml_content = file("${path.module}/policies/model-inference.xml")
+}
+```
+
+Also ensure `"X-Model-Name"` is in the `azurerm_api_management_diagnostic` `frontend_response.headers_to_log` list (Step 3c) so it flows through to `AppRequests.Properties["Response-Header-X-Model-Name"]` in Log Analytics.
+
 ---
 
 ## Prerequisites Checklist
@@ -592,3 +668,4 @@ search *
 | Step 5 (X-Backend-Region-Used) | Backend Routing Report shows all traffic as "primary" — failover is invisible. |
 | Step 7b (X-Cache header) | E2E Trace Panel 12 (cache hit rate) is empty. |
 | Step 7c (X-Tokens-Used header) | E2E Trace Panel 13 (token quota) is empty. |
+| Step 7e (X-Model-Name header) | Model Latency workbook shows no data. |
