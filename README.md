@@ -35,8 +35,8 @@ graph LR
     Dev[" Developer / App"]
     Dev -->|APIM subscription key| APIM["Azure API Management\nPremium  Internal VNet\napim-contoso.azure-api.net"]
 
-    APIM -->|Managed identity token| F1["Azure AI Foundry\nPrimary  East US\ngpt-4o-mini  Phi-4  Phi-4-mini\nembedding-3-small  embedding-3-large"]
-    APIM -->|Circuit-breaker failover| F2["Azure AI Foundry\nSecondary  West US\ngpt-4o-mini  Phi-4  Phi-4-mini\nembedding-3-small  embedding-3-large"]
+    APIM -->|Managed identity token| F1["Azure AI Foundry\nPrimary  East US\ngpt-4o-mini  phi-4  phi-4-mini\ntext-embedding-3-small  text-embedding-3-large"]
+    APIM -->|Circuit-breaker failover| F2["Azure AI Foundry\nSecondary  West US\ngpt-4o-mini  phi-4  phi-4-mini\ntext-embedding-3-small  text-embedding-3-large"]
 
     APIM -->|Telemetry| AI["Application Insights"]
     APIM -->|Gateway logs| LA["Log Analytics\n395-day retention"]
