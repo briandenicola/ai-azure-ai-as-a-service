@@ -1,0 +1,164 @@
+{
+  "version": "Notebook/1.0",
+  "items": [
+    {
+      "type": 9,
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "crossComponentResources": [
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+        ],
+        "parameters": [
+          {
+            "id": "ml-tr-param",
+            "version": "KqlParameterItem/1.0",
+            "name": "TimeRange",
+            "label": "Time Range",
+            "type": 4,
+            "isRequired": true,
+            "value": { "durationMs": 3600000 },
+            "typeSettings": {
+              "selectableValues": [
+                { "durationMs": 300000 },
+                { "durationMs": 900000 },
+                { "durationMs": 1800000 },
+                { "durationMs": 3600000 },
+                { "durationMs": 14400000 },
+                { "durationMs": 43200000 },
+                { "durationMs": 86400000 }
+              ]
+            }
+          },
+          {
+            "id": "ml-gran-param",
+            "version": "KqlParameterItem/1.0",
+            "name": "Granularity",
+            "label": "Chart Granularity",
+            "type": 2,
+            "isRequired": true,
+            "value": "5m",
+            "jsonData": "[{\"value\":\"1m\",\"label\":\"1 minute\"},{\"value\":\"5m\",\"label\":\"5 minutes\"},{\"value\":\"15m\",\"label\":\"15 minutes\"},{\"value\":\"30m\",\"label\":\"30 minutes\"},{\"value\":\"1h\",\"label\":\"1 hour\"}]",
+            "typeSettings": {
+              "additionalResourceOptions": [],
+              "showDefault": false
+            }
+          },
+          {
+            "id": "ml-pct-param",
+            "version": "KqlParameterItem/1.0",
+            "name": "Percentile",
+            "label": "Percentile",
+            "type": 2,
+            "isRequired": true,
+            "value": "90",
+            "jsonData": "[{\"value\":\"50\",\"label\":\"P50\"},{\"value\":\"90\",\"label\":\"P90\"},{\"value\":\"99\",\"label\":\"P99\"}]",
+            "typeSettings": {
+              "additionalResourceOptions": [],
+              "showDefault": false
+            }
+          },
+          {
+            "id": "ml-model-param",
+            "version": "KqlParameterItem/1.0",
+            "name": "ModelFilter",
+            "label": "Model",
+            "type": 2,
+            "multiSelect": true,
+            "quote": "\"",
+            "delimiter": ",",
+            "isRequired": false,
+            "value": ["value:all"],
+            "defaultValue": "value:all",
+            "query": "AppRequests\n| where TimeGenerated {TimeRange}\n| extend Model = coalesce(\n    tostring(Properties[\"Response-Header-X-Model-Name\"]),\n    extract(@\"/deployments/([^/?]+)\", 1, Url),\n    \"\")\n| where isnotempty(Model)\n| summarize by Model\n| sort by Model asc\n| project value = Model",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces",
+            "crossComponentResources": [
+              "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+            ],
+            "typeSettings": {
+              "additionalResourceOptions": ["value:all"],
+              "showDefault": false
+            }
+          }
+        ],
+        "style": "above",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces"
+      },
+      "name": "ml-params"
+    },
+
+    {
+      "type": 1,
+      "content": {
+        "json": "# Azure AI Model Latency — P50 · P90 · P99\n\nFoundry inference latency broken down by deployed model. Source: `ApiManagementGatewayLogs.BackendTime` (wall-clock ms at Foundry, excludes APIM policy overhead and App Gateway).\n\nModel names are extracted from the backend URL:\n- **OpenAI-compatible API** (`/openai`): `/openai/deployments/{model}/chat/completions`\n- **Native Foundry inference API** (`/models`): `/models/{model}/chat/completions`\n\n| Section | What it answers |\n|---|---|\n| **Latency over time** | How is each deployed model's tail latency trending? Select a percentile above. |\n| **Model Summary** | For the selected time window, what are P50 · P90 · P99 and total request count per model? |\n\n**Diagnostic guide:**\n- P99 spike on one model only → model-specific cold start, quota pressure, or degraded deployment\n- P99 spike on all models simultaneously → Foundry primary pool saturation or failover event\n- Large P50 → P99 spread → bimodal traffic mix (semantic cache hits + cold inferences in the same bucket)\n\nTo see which region each model is being routed to, cross-reference with the **Backend Routing Report** workbook."
+      },
+      "name": "ml-header"
+    },
+
+    {
+      "type": 1,
+      "content": {
+        "json": "## Latency over Time — P{Percentile} per Deployed Model\n\nOne line per deployed model. Use the **Percentile** selector above to switch between P50 (typical), P90 (elevated), and P99 (tail / worst-case). Source: `ApiManagementGatewayLogs.BackendTime`."
+      },
+      "name": "ml-section-time"
+    },
+
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let model_filter = dynamic([{ModelFilter}]);\nlet apimReqs = AppRequests\n| where TimeGenerated {TimeRange}\n| extend Model = coalesce(\n    tostring(Properties[\"Response-Header-X-Model-Name\"]),\n    extract(@\"/deployments/([^/?]+)\", 1, Url),\n    \"\")\n| where isnotempty(Model)\n| where array_length(model_filter) == 0 or tostring(model_filter[0]) == \"value:all\" or Model in~ (model_filter)\n| project OperationId, Model, TimeGenerated;\nAppDependencies\n| where TimeGenerated {TimeRange}\n| join kind=inner apimReqs on OperationId\n| summarize ['Latency (ms)'] = round(percentile(DurationMs, {Percentile}), 1)\n    by bin(TimeGenerated, {Granularity}), Model\n| sort by TimeGenerated asc",
+        "size": 0,
+        "title": "Foundry inference P{Percentile} latency over time — one line per deployed model",
+        "showQuery": true,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+        ],
+        "visualization": "linechart",
+        "chartSettings": {
+          "xAxis": "TimeGenerated",
+          "yAxis": ["Latency (ms)"],
+          "group": "Model",
+          "createOtherGroup": 0,
+          "showLegend": true,
+          "xSettings": { "label": "Time" },
+          "ySettings": { "label": "Latency (ms)", "min": 0 }
+        }
+      },
+      "name": "ml-panel-latency-by-model"
+    },
+
+    {
+      "type": 1,
+      "content": {
+        "json": "## Model Latency Summary\n\nAggregate percentiles for the full selected time range. All values are Foundry inference time only (ms) — APIM and App Gateway overhead are excluded. Sorted by model name; click any column header to re-sort."
+      },
+      "name": "ml-section-summary"
+    },
+
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "let model_filter = dynamic([{ModelFilter}]);\nlet apimReqs = AppRequests\n| where TimeGenerated {TimeRange}\n| extend Model = coalesce(\n    tostring(Properties[\"Response-Header-X-Model-Name\"]),\n    extract(@\"/deployments/([^/?]+)\", 1, Url),\n    \"\")\n| where isnotempty(Model)\n| where array_length(model_filter) == 0 or tostring(model_filter[0]) == \"value:all\" or Model in~ (model_filter)\n| project OperationId, Model;\nAppDependencies\n| where TimeGenerated {TimeRange}\n| join kind=inner apimReqs on OperationId\n| summarize\n    ['P50 (ms)'] = round(percentile(DurationMs, 50), 1),\n    ['P90 (ms)'] = round(percentile(DurationMs, 90), 1),\n    ['P99 (ms)'] = round(percentile(DurationMs, 99), 1),\n    Requests     = count()\n  by Model\n| sort by Model asc",
+        "size": 2,
+        "title": "P50 · P90 · P99 and request count per deployed model — full selected time range",
+        "showQuery": true,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [
+          "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-contoso-ai-platform-dev/providers/Microsoft.OperationalInsights/workspaces/law-contoso-ai-dev"
+        ],
+        "visualization": "table",
+        "gridSettings": {
+          "sortBy": [{ "itemKey": "Model", "sortOrder": 1 }]
+        }
+      },
+      "name": "ml-panel-summary-table"
+    }
+  ],
+  "$schema": "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json"
+}

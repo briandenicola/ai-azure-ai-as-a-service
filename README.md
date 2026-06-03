@@ -35,8 +35,8 @@ graph LR
     Dev[" Developer / App"]
     Dev -->|APIM subscription key| APIM["Azure API Management\nPremium  Internal VNet\napim-contoso.azure-api.net"]
 
-    APIM -->|Managed identity token| F1["Azure AI Foundry\nPrimary  East US\ngpt-4o-mini  Phi-4"]
-    APIM -->|Circuit-breaker failover| F2["Azure AI Foundry\nSecondary  West US\ngpt-4o-mini  Phi-4"]
+    APIM -->|Managed identity token| F1["Azure AI Foundry\nPrimary  East US\ngpt-4o-mini  Phi-4  Phi-4-mini\nembedding-3-small  embedding-3-large"]
+    APIM -->|Circuit-breaker failover| F2["Azure AI Foundry\nSecondary  West US\ngpt-4o-mini  Phi-4  Phi-4-mini\nembedding-3-small  embedding-3-large"]
 
     APIM -->|Telemetry| AI["Application Insights"]
     APIM -->|Gateway logs| LA["Log Analytics\n395-day retention"]
@@ -116,7 +116,7 @@ azd deploy
 | Resource | Details |
 |---|---|
 | **Azure API Management** (Premium, Internal VNet) | Bronze / Silver / Gold products, 3 API surfaces, circuit-breaker policy |
-| **Azure AI Foundry** × 2 | Primary (primary region) + Secondary (secondary region); gpt-4o-mini + Phi-4 model deployments |
+| **Azure AI Foundry** × 2 | Primary (primary region) + Secondary (secondary region); gpt-4o-mini + Phi-4 + Phi-4-mini + text-embedding-3-small + text-embedding-3-large model deployments |
 | **Private Endpoints** × 2 | Both Foundry accounts reachable only via private DNS (no public network access) |
 | **Private DNS Zone** | `privatelink.cognitiveservices.azure.com` linked to the VNet |
 | **Log Analytics Workspace** | 395-day retention; APIM gateway logs + metrics |
@@ -250,12 +250,28 @@ Developers request access through ServiceNow and receive a single APIM subscript
 
 | Tier | Models | TPM | RPM | Approval | Use case |
 |---|---|---|---|---|---|
-| **Bronze** | gpt-4o-mini, Phi-4 | 500 | 60 | Self-service | Dev/test, low-volume apps |
-| **Silver** | gpt-4o, gpt-4o-mini, Phi-4, Llama-3 + Agents API | 5,000 | 300 | Self-service | Production workloads |
-| **Gold** | All models + Agents API (PCI DSS scope eligible) | 5,500 | 330 | Requires approval | High-volume / PCI workloads |
+| **Bronze** | gpt-4o-mini, Phi-4, Phi-4-mini, text-embedding-3-small | 500 | 60 | Self-service | Dev/test, low-volume apps |
+| **Silver** | gpt-4o, gpt-4o-mini, Phi-4, Phi-4-mini, Llama-3, text-embedding-3-small + Agents API | 1,000 | 120 | Self-service | Production workloads |
+| **Gold** | All models incl. text-embedding-3-large + Agents API (PCI DSS scope eligible) | 2,000 | 240 | Requires approval | High-volume / PCI workloads |
 
 > **TPM** (Tokens Per Minute) — counts the combined prompt + completion tokens across all requests in the current minute window. A typical short chat exchange is ~500–1,000 tokens; a document-processing request may be 4,000–8,000 tokens.  
 > **RPM** (Requests Per Minute) — counts the number of API calls regardless of their size. A 10-token ping and a 4,000-token document request both count as 1 RPM.
+
+#### Model access matrix
+
+| Model | Bronze | Silver | Gold |
+|---|:---:|:---:|:---:|
+| `gpt-4o-mini` | ✓ | ✓ | ✓ |
+| `phi-4` | ✓ | ✓ | ✓ |
+| `phi-4-mini` | ✓ | ✓ | ✓ |
+| `text-embedding-3-small` | ✓ | ✓ | ✓ |
+| `gpt-4o` | — | ✓ | ✓ |
+| `llama-3` / `meta-llama` | — | ✓ | ✓ |
+| `text-embedding-3-large` | — | — | ✓ |
+| *(future models)* | — | — | ✓ |
+| **Agents API** | — | ✓ | ✓ |
+
+> **TPM limits are aggregate, not per-model.** A Bronze subscription has a single 500 TPM bucket shared across all three models it can access — calling `phi-4-mini` and `gpt-4o-mini` draws from the same counter. This keeps enforcement simple and predictable. If your workload needs to guarantee capacity for a high-priority model independently of batch traffic on a cheaper model, request a Silver or Gold tier where the larger bucket reduces contention, or open a quota increase request via ServiceNow.
 
 #### How quota works in this platform
 
@@ -284,15 +300,15 @@ Model
 ```mermaid
 pie title Per-subscription Token throughput (TPM)
     "Bronze (500)" : 500
-    "Silver (5,000)" : 5000
-    "Gold (5,500)" : 5500
+    "Silver (1,000)" : 1000
+    "Gold (2,000)" : 2000
 ```
 
 ```mermaid
 pie title Per-subscription Request throughput (RPM)
     "Bronze (60)" : 60
-    "Silver (300)" : 300
-    "Gold (330)" : 330
+    "Silver (120)" : 120
+    "Gold (240)" : 240
 ```
 
 > All tiers include multi-region circuit-breaker failover (East US → West US). Gold requires manual approval and is limited to one subscription per customer (PCI DSS Req 7).
@@ -346,7 +362,7 @@ client = ChatCompletionsClient(
     credential=AzureKeyCredential("<apim-subscription-key>")
 )
 response = client.complete(
-    model="phi-4",
+    model="phi-4",          # also: "phi-4-mini"
     messages=[{"role": "user", "content": "Hello"}]
 )
 ```

@@ -101,6 +101,31 @@ resource platformHealthWorkbook 'Microsoft.Insights/workbooks@2022-04-01' = {
   }
 }
 
-output workbookId            string = backendRoutingWorkbook.id
-output e2eWorkbookId         string = e2eTraceWorkbook.id
+// ─── Model Latency workbook ────────────────────────────────────────────────────
+// Foundry inference latency (BackendTime) broken down per deployed model.
+// Panels: P{50|90|99} latency over time (line chart) + P50/P90/P99 summary table.
+// Source: ApiManagementGatewayLogs — model name extracted from BackendUrl path.
+
+var mlRawContent     = loadTextContent('../../observability/workbooks/model-latency.workbook.json')
+var mlSerializedData = replace(mlRawContent, placeholderWorkspaceId, logAnalyticsWorkspaceId)
+
+var modelLatencyWorkbookId = guid(resourceGroup().id, 'model-latency')
+
+resource modelLatencyWorkbook 'Microsoft.Insights/workbooks@2022-04-01' = {
+  name: modelLatencyWorkbookId
+  location: location
+  kind: 'shared'
+  tags: tags
+  properties: {
+    displayName: 'Azure AI Model Latency — P50 · P90 · P99'
+    serializedData: mlSerializedData
+    version: '1.0'
+    sourceId: logAnalyticsWorkspaceId
+    category: 'workbook'
+  }
+}
+
+output workbookId               string = backendRoutingWorkbook.id
+output e2eWorkbookId            string = e2eTraceWorkbook.id
 output platformHealthWorkbookId string = platformHealthWorkbook.id
+output modelLatencyWorkbookId   string = modelLatencyWorkbook.id

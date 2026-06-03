@@ -1,0 +1,32 @@
+// Model Latency — Panel 2: P50 / P90 / P99 summary table per deployed model
+// Data source:  AppRequests (model name) joined with AppDependencies (Foundry backend latency)
+//   AppDependencies.DurationMs = wall-clock ms at Foundry — full selected time range, no bucketing
+//   Join key: OperationId (shared between AppRequests and AppDependencies)
+// Parameters:
+//   {TimeRange}    — workbook time-range picker
+//   {ModelFilter}  — multiselect model picker; "value:all" passes all rows
+//
+// Model name extraction (same logic as panel 1):
+//   1. Properties["Response-Header-X-Model-Name"] — APIM policy-set header
+//   2. URL extraction for OpenAI-compatible path (/openai/deployments/{model}/)
+
+let model_filter = dynamic([{ModelFilter}]);
+let apimReqs = AppRequests
+| where TimeGenerated {TimeRange}
+| extend Model = coalesce(
+    tostring(Properties["Response-Header-X-Model-Name"]),
+    extract(@"/deployments/([^/?]+)", 1, Url),
+    "")
+| where isnotempty(Model)
+| where array_length(model_filter) == 0 or tostring(model_filter[0]) == "value:all" or Model in~ (model_filter)
+| project OperationId, Model;
+AppDependencies
+| where TimeGenerated {TimeRange}
+| join kind=inner apimReqs on OperationId
+| summarize
+    ['P50 (ms)'] = round(percentile(DurationMs, 50), 1),
+    ['P90 (ms)'] = round(percentile(DurationMs, 90), 1),
+    ['P99 (ms)'] = round(percentile(DurationMs, 99), 1),
+    Requests     = count()
+  by Model
+| sort by Model asc

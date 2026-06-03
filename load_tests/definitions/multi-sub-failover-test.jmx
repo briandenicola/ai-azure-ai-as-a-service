@@ -876,7 +876,7 @@ if (region.contains("secondary")) {
 
       <!-- ================================================================= -->
       <!-- Suite 7: Investment Platform — Sustained traffic (3 threads, 8s think, 600s) -->
-      <!-- Gold tier: 5,500 TPM / 330 RPM at APIM product level. Sustained     -->
+      <!-- Gold tier: 2,000 TPM / 240 RPM at APIM product level. Sustained     -->
       <!-- load validates Gold receives failover when shared primary Foundry   -->
       <!-- cap (1K TPM test limit) saturates from AML + Credit Underwriting.  -->
       <!-- ================================================================= -->
@@ -987,7 +987,7 @@ if (region.contains("secondary")) {
 
       <!-- ================================================================= -->
       <!-- Suite 8: Investment Platform — Failover Blast (3 threads, 4s think, 595s) -->
-      <!-- Gold tier: 5,500 TPM / 330 RPM APIM product cap. Uses max_tokens=200 -->
+      <!-- Gold tier: 2,000 TPM / 240 RPM APIM product cap. Uses max_tokens=200 -->
       <!-- ~630 TPM on top of AML + Credit Underwriting blast → combined load  -->
       <!-- pushes shared primary Foundry over 1K TPM cap → 429 → failover.   -->
       <!-- ================================================================= -->

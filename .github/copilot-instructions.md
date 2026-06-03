@@ -12,7 +12,7 @@ This repo is **Azure AI as a Managed Service** — an enterprise platform that e
 | Component | What it does |
 |---|---|
 | **APIM Premium (Internal VNet)** | AI gateway — rate limiting, caching, failover, audit logging, PCI DSS controls |
-| **Azure AI Foundry × 2** | Primary (East US) + Secondary (West US); gpt-4o-mini, gpt-4o, Phi-4, Llama-3-70b |
+| **Azure AI Foundry × 2** | Primary (East US) + Secondary (West US); gpt-4o-mini, gpt-4o, Phi-4, Llama-3-70b, text-embedding-3-small, text-embedding-3-large |
 | **Private Endpoints × 2** | Foundry reachable only inside the VNet — no public access |
 | **Function App (Flex Consumption)** | APIM subscription event handler — triggered by Event Grid when subscriptions are created/updated |
 | **Event Grid** | Publishes APIM subscription lifecycle events to the Function App |
@@ -27,9 +27,9 @@ This repo is **Azure AI as a Managed Service** — an enterprise platform that e
 
 | Tier | APIM product ID | Models | TPM | RPM |
 |---|---|---|---|---|
-| **Bronze** | `ai-bronze` | gpt-4o-mini, Phi-4 | 500 | 60 |
-| **Silver** | `ai-silver` | + gpt-4o, Llama-3-70b, Agents API | 5,000 | 300 |
-| **Gold** | `ai-gold` | All models incl. o1; Agents API | 5,500 | 330 |
+| **Bronze** | `ai-bronze` | gpt-4o-mini, Phi-4, Phi-4-mini, text-embedding-3-small | 500 | 60 |
+| **Silver** | `ai-silver` | + gpt-4o, Llama-3-70b, text-embedding-3-small, Agents API | 1,000 | 120 |
+| **Gold** | `ai-gold` | All models incl. o1 + text-embedding-3-large; Agents API | 2,000 | 240 |
 
 ### Auth model
 - **Client → APIM**: `Ocp-Apim-Subscription-Key` header (one key per LOB/app)

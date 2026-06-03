@@ -103,6 +103,66 @@ resource phi4_1 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = 
   }
 }
 
+// Phi-4-mini on primary — lighter-weight successor to Phi-4, even lower cost
+// GlobalStandard required for Microsoft open-weight models (Standard not supported)
+resource phi4mini_1 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: foundry1
+  name: 'phi-4-mini'
+  dependsOn: [phi4_1]  // Deployments must be created sequentially per account
+  sku: {
+    name: 'GlobalStandard'
+    capacity: 1  // 1K TPM — lightweight model; increase for production workloads
+  }
+  properties: {
+    model: {
+      format: 'Microsoft'
+      name: 'Phi-4-mini-instruct'
+      version: '1'
+    }
+    versionUpgradeOption: 'OnceCurrentVersionExpired'
+  }
+}
+
+// text-embedding-3-small on primary — lightweight embedding model; Bronze, Silver, and Gold tiers
+// OpenAI format; GlobalStandard SKU for cross-region availability.
+resource embeddingSmall_1 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: foundry1
+  name: 'text-embedding-3-small'
+  dependsOn: [phi4mini_1]  // Deployments must be created sequentially per account
+  sku: {
+    name: 'GlobalStandard'
+    capacity: 120  // 120K TPM — typical minimum for embedding deployments
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: 'text-embedding-3-small'
+      version: '1'
+    }
+    versionUpgradeOption: 'OnceCurrentVersionExpired'
+  }
+}
+
+// text-embedding-3-large on primary — high-dimension embedding model; Gold tier only
+// APIM Bronze/Silver allowlists block this deployment by URL path; Gold has no allowlist.
+resource embeddingLarge_1 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: foundry1
+  name: 'text-embedding-3-large'
+  dependsOn: [embeddingSmall_1]  // Deployments must be created sequentially per account
+  sku: {
+    name: 'GlobalStandard'
+    capacity: 120  // 120K TPM — typical minimum for embedding deployments
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: 'text-embedding-3-large'
+      version: '1'
+    }
+    versionUpgradeOption: 'OnceCurrentVersionExpired'
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Foundry Account 2 — Secondary (West US)
 // ---------------------------------------------------------------------------
@@ -161,6 +221,63 @@ resource phi4_2 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = 
   }
 }
 
+// Phi-4-mini on secondary — mirrors primary for failover consistency
+resource phi4mini_2 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: foundry2
+  name: 'phi-4-mini'
+  dependsOn: [phi4_2]  // Deployments must be created sequentially per account
+  sku: {
+    name: 'GlobalStandard'
+    capacity: 1
+  }
+  properties: {
+    model: {
+      format: 'Microsoft'
+      name: 'Phi-4-mini-instruct'
+      version: '1'
+    }
+    versionUpgradeOption: 'OnceCurrentVersionExpired'
+  }
+}
+
+// text-embedding-3-small on secondary — mirrors primary for failover consistency
+resource embeddingSmall_2 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: foundry2
+  name: 'text-embedding-3-small'
+  dependsOn: [phi4mini_2]  // Deployments must be created sequentially per account
+  sku: {
+    name: 'GlobalStandard'
+    capacity: 120  // 120K TPM — typical minimum for embedding deployments
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: 'text-embedding-3-small'
+      version: '1'
+    }
+    versionUpgradeOption: 'OnceCurrentVersionExpired'
+  }
+}
+
+// text-embedding-3-large on secondary — mirrors primary for failover consistency
+resource embeddingLarge_2 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  parent: foundry2
+  name: 'text-embedding-3-large'
+  dependsOn: [embeddingSmall_2]  // Deployments must be created sequentially per account
+  sku: {
+    name: 'GlobalStandard'
+    capacity: 120  // 120K TPM — typical minimum for embedding deployments
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: 'text-embedding-3-large'
+      version: '1'
+    }
+    versionUpgradeOption: 'OnceCurrentVersionExpired'
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Private Endpoints + Private DNS
 //
@@ -203,7 +320,9 @@ resource pe1 'Microsoft.Network/privateEndpoints@2023-05-01' = if (deployPrivate
   // Must wait for ALL model deployments to complete before creating the PE.
   // Model deployments put the account in 'Accepted' state; PE creation fails if
   // the account is not in 'Succeeded' state.
-  dependsOn: [gpt4oMini1, phi4_1]
+  // embeddingLarge_1 is the tail of the primary deployment chain:
+  //   gpt4oMini1 → phi4_1 → phi4mini_1 → embeddingSmall_1 → embeddingLarge_1
+  dependsOn: [embeddingLarge_1]
   properties: {
     subnet: {
       id: privateEndpointSubnetId
@@ -240,7 +359,9 @@ resource pe1DnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroup
 resource pe2 'Microsoft.Network/privateEndpoints@2023-05-01' = if (deployPrivateEndpoints) {
   name: 'pe-${accountPrefix}-secondary'
   location: primaryLocation  // PE location = VNet region, not the target resource region
-  dependsOn: [gpt4oMini2, phi4_2]
+  // embeddingLarge_2 is the tail of the secondary deployment chain:
+  //   gpt4oMini2 → phi4_2 → phi4mini_2 → embeddingSmall_2 → embeddingLarge_2
+  dependsOn: [embeddingLarge_2]
   properties: {
     subnet: {
       id: privateEndpointSubnetId

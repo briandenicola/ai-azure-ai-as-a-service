@@ -287,7 +287,7 @@ resource apimAppInsightsDiagnostics 'Microsoft.ApiManagement/service/diagnostics
         body: { bytes: 0 }                     // never log request body (PCI + cost)
       }
       response: {
-        headers: [ 'X-Backend-Region-Used', 'X-Correlation-Id', 'X-Tokens-Used', 'X-Cache' ]   // Foundry region, correlation, token count, cache status
+        headers: [ 'X-Backend-Region-Used', 'X-Correlation-Id', 'X-Tokens-Used', 'X-Cache', 'X-Model-Name' ]   // Foundry region, correlation, token count, cache status, model name
         body: { bytes: 0 }
       }
     }
@@ -369,20 +369,26 @@ resource bronzeProductPolicy 'Microsoft.ApiManagement/service/products/policies@
         <set-backend-service base-url="@((string)context.Variables[&quot;primaryBackend&quot;] + (string)context.Variables[&quot;apiPathSuffix&quot;])" />
       </otherwise>
     </choose>
-    <!-- Model allowlist: only lightweight models for Bronze -->
+    <!-- Model allowlist: lightweight models + text-embedding-3-small for Bronze -->
+    <!-- Checks both body["model"] (native inference path) and URL deployment name (OpenAI path) -->
+    <!-- Embedding API calls use /openai/deployments/{name}/embeddings — model is in the URL, not the body -->
     <choose>
       <when condition="@{
         try {
           var body = context.Request.Body.As&lt;JObject&gt;(preserveContent: true);
-          var model = (string)body[&quot;model&quot;];
-          var allowed = new[] { &quot;gpt-4o-mini&quot;, &quot;phi-4&quot;, &quot;phi-4-mini&quot; };
-          return model != null &amp;&amp; !allowed.Any(m => model.StartsWith(m, StringComparison.OrdinalIgnoreCase));
+          var modelFromBody = (string)body[&quot;model&quot;];
+          var pathParts = context.Request.Url.Path.Split('/');
+          var depIdx = System.Array.IndexOf(pathParts, &quot;deployments&quot;);
+          var deploymentFromPath = depIdx >= 0 &amp;&amp; depIdx + 1 &lt; pathParts.Length ? pathParts[depIdx + 1] : null;
+          var effectiveModel = modelFromBody ?? deploymentFromPath;
+          var allowed = new[] { &quot;gpt-4o-mini&quot;, &quot;phi-4&quot;, &quot;phi-4-mini&quot;, &quot;text-embedding-3-small&quot; };
+          return effectiveModel != null &amp;&amp; !allowed.Any(m => effectiveModel.StartsWith(m, StringComparison.OrdinalIgnoreCase));
         } catch { return false; }
       }">
         <return-response>
           <set-status code="403" reason="Forbidden" />
           <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
-          <set-body>{"error":{"code":"ModelNotAllowed","message":"Your Bronze subscription allows gpt-4o-mini and Phi-4. Upgrade to Silver or Gold for access to gpt-4o, Llama-3-70b, and o1."}}</set-body>
+          <set-body>{"error":{"code":"ModelNotAllowed","message":"Your Bronze subscription allows gpt-4o-mini, Phi-4, Phi-4-mini, and text-embedding-3-small. Upgrade to Silver or Gold for gpt-4o, Llama-3-70b, and text-embedding-3-large."}}</set-body>
         </return-response>
       </when>
     </choose>
@@ -408,13 +414,13 @@ resource bronzeProductPolicy 'Microsoft.ApiManagement/service/products/policies@
 
 // ─── Product: Silver ────────────────────────────────────────────────────────
 // Self-service, no approval. Inference + Agents API.
-// gpt-4o, gpt-4o-mini, Phi-4, Llama-3-70b. 5 K TPM · 300 RPM · failover.
+// gpt-4o, gpt-4o-mini, Phi-4, Llama-3-70b. 1 K TPM · 120 RPM · failover.
 resource silverProduct 'Microsoft.ApiManagement/service/products@2023-05-01-preview' = {
   parent: apim
   name: 'ai-silver'
   properties: {
     displayName: 'AI Silver'
-    description: 'Mid-tier AI access. Models: gpt-4o, gpt-4o-mini, Phi-4, Llama-3-70b + Agents API. 5K TPM, 300 RPM. Multi-region failover included.'
+    description: 'Mid-tier AI access. Models: gpt-4o, gpt-4o-mini, Phi-4, Llama-3-70b + Agents API. 1K TPM, 120 RPM. Multi-region failover included.'
     subscriptionRequired: true
     approvalRequired: false
     state: 'published'
@@ -449,30 +455,36 @@ resource silverProductPolicy 'Microsoft.ApiManagement/service/products/policies@
         <set-backend-service base-url="@((string)context.Variables[&quot;primaryBackend&quot;] + (string)context.Variables[&quot;apiPathSuffix&quot;])" />
       </otherwise>
     </choose>
-    <!-- Model allowlist: standard + large models, no o1 -->
+    <!-- Model allowlist: standard models + text-embedding-3-small for Silver; no o1 or embedding-large -->
+    <!-- Checks both body["model"] (native inference path) and URL deployment name (OpenAI path) -->
+    <!-- Embedding API calls use /openai/deployments/{name}/embeddings — model is in the URL, not the body -->
     <choose>
       <when condition="@{
         try {
           var body = context.Request.Body.As&lt;JObject&gt;(preserveContent: true);
-          var model = (string)body[&quot;model&quot;];
-          var allowed = new[] { &quot;gpt-4o&quot;, &quot;gpt-4o-mini&quot;, &quot;phi-4&quot;, &quot;phi-4-mini&quot;, &quot;llama-3&quot;, &quot;meta-llama&quot; };
-          return model != null &amp;&amp; !allowed.Any(m => model.StartsWith(m, StringComparison.OrdinalIgnoreCase));
+          var modelFromBody = (string)body[&quot;model&quot;];
+          var pathParts = context.Request.Url.Path.Split('/');
+          var depIdx = System.Array.IndexOf(pathParts, &quot;deployments&quot;);
+          var deploymentFromPath = depIdx >= 0 &amp;&amp; depIdx + 1 &lt; pathParts.Length ? pathParts[depIdx + 1] : null;
+          var effectiveModel = modelFromBody ?? deploymentFromPath;
+          var allowed = new[] { &quot;gpt-4o&quot;, &quot;gpt-4o-mini&quot;, &quot;phi-4&quot;, &quot;phi-4-mini&quot;, &quot;llama-3&quot;, &quot;meta-llama&quot;, &quot;text-embedding-3-small&quot; };
+          return effectiveModel != null &amp;&amp; !allowed.Any(m => effectiveModel.StartsWith(m, StringComparison.OrdinalIgnoreCase));
         } catch { return false; }
       }">
         <return-response>
           <set-status code="403" reason="Forbidden" />
           <set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header>
-          <set-body>{"error":{"code":"ModelNotAllowed","message":"Your Silver subscription allows gpt-4o, gpt-4o-mini, Phi-4, and Llama-3-70b. Upgrade to Gold for o1 and other premium models."}}</set-body>
+          <set-body>{"error":{"code":"ModelNotAllowed","message":"Your Silver subscription allows gpt-4o, gpt-4o-mini, Phi-4, Llama-3-70b, and text-embedding-3-small. Upgrade to Gold for o1, text-embedding-3-large, and other premium models."}}</set-body>
         </return-response>
       </when>
     </choose>
-    <!-- TPM cap: 5 K tokens/min — raised from 1K after v23 failover proof. -->
-    <azure-openai-token-limit tokens-per-minute="5000"
+    <!-- TPM cap: 1 K tokens/min -->
+    <azure-openai-token-limit tokens-per-minute="1000"
       counter-key="@(context.Subscription.Id)"
       estimate-prompt-tokens="true"
       remaining-tokens-header-name="X-Token-Remaining" />
-    <!-- Rate limit: 300 RPM -->
-    <rate-limit-by-key calls="300" renewal-period="60"
+    <!-- Rate limit: 120 RPM -->
+    <rate-limit-by-key calls="120" renewal-period="60"
       counter-key="@(&quot;silver-rpm-&quot; + context.Subscription.Id)" />
   </inbound>
   <backend>
@@ -488,7 +500,7 @@ resource silverProductPolicy 'Microsoft.ApiManagement/service/products/policies@
 
 // ─── Product: Gold ──────────────────────────────────────────────────────────
 // Requires approval. Full model access (all models incl. o1) + Agents API +
-// PCI DSS scope eligibility. 5.5 K TPM · 330 RPM · failover.
+// PCI DSS scope eligibility. 2 K TPM · 240 RPM · failover.
 // PCI DSS Req 7: Require explicit subscription approval. subscriptionsLimit: 1
 // ensures least-privilege — a single customer cannot hold multiple Gold keys.
 resource goldProduct 'Microsoft.ApiManagement/service/products@2023-05-01-preview' = {
@@ -496,7 +508,7 @@ resource goldProduct 'Microsoft.ApiManagement/service/products@2023-05-01-previe
   name: 'ai-gold'
   properties: {
     displayName: 'AI Gold'
-    description: 'Premium AI access. All models (gpt-4o, o1, Phi-4, Llama-3-70b) + Agents API + PCI DSS scope eligibility. 5,500 TPM, 330 RPM. Multi-region failover included. Requires approval.'
+    description: 'Premium AI access. All models (gpt-4o, o1, Phi-4, Llama-3-70b) + Agents API + PCI DSS scope eligibility. 2,000 TPM, 240 RPM. Multi-region failover included. Requires approval.'
     subscriptionRequired: true
     // PCI DSS Req 7: manual approval required for highest-privilege tier
     approvalRequired: true
@@ -535,13 +547,13 @@ resource goldProductPolicy 'Microsoft.ApiManagement/service/products/policies@20
       </otherwise>
     </choose>
     <!-- No model allowlist — Gold has access to all models -->
-    <!-- TPM cap: 5.5 K tokens/min — 10% above Silver -->
-    <azure-openai-token-limit tokens-per-minute="5500"
+    <!-- TPM cap: 2 K tokens/min — 2× Silver -->
+    <azure-openai-token-limit tokens-per-minute="2000"
       counter-key="@(context.Subscription.Id)"
       estimate-prompt-tokens="true"
       remaining-tokens-header-name="X-Token-Remaining" />
-    <!-- Rate limit: 330 RPM — 10% above Silver -->
-    <rate-limit-by-key calls="330" renewal-period="60"
+    <!-- Rate limit: 240 RPM — 2× Silver -->
+    <rate-limit-by-key calls="240" renewal-period="60"
       counter-key="@(&quot;gold-rpm-&quot; + context.Subscription.Id)" />
   </inbound>
   <backend>
@@ -771,6 +783,13 @@ resource openaiInferenceApiPolicy 'Microsoft.ApiManagement/service/apis/policies
         <set-header name="X-Tokens-Used" exists-action="override">
           <value>@((string)context.Variables.GetValueOrDefault("totalTokens", "0"))</value>
         </set-header>
+        <set-variable name="modelName" value="@{
+          try { return context.Response.Body.As<JObject>(preserveContent: true)?["model"]?.ToString() ?? ""; }
+          catch { return ""; }
+        }" />
+        <set-header name="X-Model-Name" exists-action="override">
+          <value>@((string)context.Variables.GetValueOrDefault("modelName", ""))</value>
+        </set-header>
       </when>
     </choose>
   </outbound>
@@ -779,6 +798,58 @@ resource openaiInferenceApiPolicy 'Microsoft.ApiManagement/service/apis/policies
     <set-header name="X-Backend-Region-Used" exists-action="override">
       <value>@(context.Variables.GetValueOrDefault("selectedBackend", "unknown"))</value>
     </set-header>
+  </on-error>
+</policies>'''
+  }
+}
+
+// ==========================================
+// Resource: model-inference API-level Policy — Model Name Observability + Token Extraction
+//
+// The native Foundry inference API (/models) passes the model name in the request
+// BODY (not the URL), so it cannot be extracted from BackendUrl in gateway logs.
+// This policy reads the model name from the inbound request JSON and emits it as
+// X-Model-Name on the outbound response — captured by App Insights diagnostics and
+// surfaced in AppRequests.Properties["Response-Header-X-Model-Name"].
+// Also extracts total_tokens from the response body for parity with openai-inference.
+// ==========================================
+resource modelInferenceApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2023-05-01-preview' = {
+  parent: modelInferenceApi
+  name: 'policy'
+  properties: {
+    format: 'rawxml'
+    value: '''<policies>
+  <inbound>
+    <base />
+    <!-- Read model name from request body (preserveContent ensures body is still forwarded). -->
+    <set-variable name="requestedModel" value="@{
+      try { return context.Request.Body.As<JObject>(preserveContent: true)?["model"]?.ToString() ?? ""; }
+      catch { return ""; }
+    }" />
+    <set-backend-service base-url="{{foundry-primary-endpoint}}/models" />
+  </inbound>
+  <backend>
+    <base />
+  </backend>
+  <outbound>
+    <base />
+    <set-header name="X-Model-Name" exists-action="override">
+      <value>@((string)context.Variables.GetValueOrDefault("requestedModel", ""))</value>
+    </set-header>
+    <choose>
+      <when condition="@(context.Response.StatusCode == 200)">
+        <set-variable name="totalTokens" value="@{
+          try { return context.Response.Body.As<JObject>(preserveContent: true)?["usage"]?["total_tokens"]?.ToString() ?? "0"; }
+          catch { return "0"; }
+        }" />
+        <set-header name="X-Tokens-Used" exists-action="override">
+          <value>@((string)context.Variables.GetValueOrDefault("totalTokens", "0"))</value>
+        </set-header>
+      </when>
+    </choose>
+  </outbound>
+  <on-error>
+    <base />
   </on-error>
 </policies>'''
   }

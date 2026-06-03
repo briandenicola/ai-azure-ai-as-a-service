@@ -86,14 +86,14 @@ if ($appgw.state -ne 'Running') {
 Write-Host ""
 Write-Host "=== Step 4: Fetch APIM subscription key ===" -ForegroundColor Cyan
 
-# Silver key: 300 RPM limit — stays within APIM rate limits while still
+# Silver key: 120 RPM limit — stays within APIM rate limits while still
 # generating enough TPM to saturate the 1K TPM Foundry primary cap.
 $SILVER_KEY = (az rest --method POST `
     --uri "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.ApiManagement/service/$APIM_NAME/subscriptions/app-aml-screening/listSecrets?api-version=2022-08-01" `
     2>$null | ConvertFrom-Json).primaryKey
 
 if (-not $SILVER_KEY) { Write-Error "Failed to fetch Silver key for 'app-aml-screening'." }
-Write-Host "  Silver key (app-aml-screening) : $($SILVER_KEY.Substring(0,8))... (300 RPM limit)" -ForegroundColor Green
+Write-Host "  Silver key (app-aml-screening) : $($SILVER_KEY.Substring(0,8))... (120 RPM limit)" -ForegroundColor Green
 
 # ── Step 5: Configure TLS ────────────────────────────────────────────────────────
 Write-Host ""

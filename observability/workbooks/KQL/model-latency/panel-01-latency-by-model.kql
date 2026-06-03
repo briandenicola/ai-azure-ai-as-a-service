@@ -1,0 +1,35 @@
+// Model Latency — Panel 1: Foundry inference latency over time, per deployed model (line chart)
+// Data source:  AppRequests (model name) joined with AppDependencies (Foundry backend latency)
+//   AppDependencies.DurationMs = wall-clock ms at Foundry — equivalent to ApiManagementGatewayLogs.BackendTime
+//   Join key: OperationId (shared between AppRequests and AppDependencies, same as in e2e-trace workbook)
+// Parameters:
+//   {TimeRange}    — workbook time-range picker (substituted as a KQL datetime filter)
+//   {Granularity}  — chart bucket width (e.g. "5m", "15m", "1h")
+//   {Percentile}   — literal number 50 / 90 / 99, substituted before KQL execution
+//   {ModelFilter}  — multiselect model picker; "value:all" passes all rows
+//                    substituted as quoted comma-separated values: "gpt-4o-mini","gpt-4o"
+//
+// Model name extraction (applied in priority order):
+//   1. Properties["Response-Header-X-Model-Name"] — set by APIM policy for both API paths
+//      (modelInferenceApiPolicy: from request body; openaiInferenceApiPolicy: from response body)
+//   2. URL extraction from AppRequests.Url for OpenAI-compatible path (/openai/deployments/{model}/)
+//
+// Note: percentile() requires a compile-time constant; workbook substitutes {Percentile} → 90
+// before the query is parsed, making  percentile(..., 90)  valid KQL.
+
+let model_filter = dynamic([{ModelFilter}]);
+let apimReqs = AppRequests
+| where TimeGenerated {TimeRange}
+| extend Model = coalesce(
+    tostring(Properties["Response-Header-X-Model-Name"]),
+    extract(@"/deployments/([^/?]+)", 1, Url),
+    "")
+| where isnotempty(Model)
+| where array_length(model_filter) == 0 or tostring(model_filter[0]) == "value:all" or Model in~ (model_filter)
+| project OperationId, Model, TimeGenerated;
+AppDependencies
+| where TimeGenerated {TimeRange}
+| join kind=inner apimReqs on OperationId
+| summarize ['Latency (ms)'] = round(percentile(DurationMs, {Percentile}), 1)
+    by bin(TimeGenerated, {Granularity}), Model
+| sort by TimeGenerated asc

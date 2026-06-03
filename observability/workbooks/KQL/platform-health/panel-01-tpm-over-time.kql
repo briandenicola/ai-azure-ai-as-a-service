@@ -15,8 +15,8 @@
 //
 // Thresholds to watch:
 //   Bronze cap:  500 TPM/sub
-//   Silver cap: 5000 TPM/sub
-//   Gold cap:   5500 TPM/sub
+//   Silver cap: 1000 TPM/sub
+//   Gold cap:   2000 TPM/sub
 //   Foundry primary: 1000 TPM total shared pool (East US)
 // A combined platform TPM line approaching 1000 indicates primary Foundry saturation
 // and should correlate with circuit-breaker trips in the Backend Routing Report.
